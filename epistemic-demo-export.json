@@ -1,0 +1,423 @@
+{
+  "claims": [
+    {
+      "subject": "coordination-failures",
+      "predicate": "are-caused-by",
+      "object": "epistemic-fragmentation",
+      "confidence": {
+        "level": 0.85,
+        "decomposition": null
+      },
+      "modality": "empirical",
+      "scope": {
+        "domain": "general",
+        "temporal_bounds": null,
+        "geographic_bounds": null,
+        "population": null
+      },
+      "identity": {
+        "author": "local",
+        "signed": false
+      },
+      "assumes": [],
+      "notes": "Core thesis: most coordination failures aren't preference disagreements but breakdowns in shared epistemic infrastructure",
+      "created_at": 1773371143.4304795,
+      "id": "900acbac401f7d4d518ee78017cb364379ac176853eb37b1953e7828983cd2de"
+    },
+    {
+      "subject": "identity-infrastructure",
+      "predicate": "is-prerequisite-for",
+      "object": "trust-networks",
+      "confidence": {
+        "level": 0.9,
+        "decomposition": null
+      },
+      "modality": "analytic",
+      "scope": {
+        "domain": "general",
+        "temporal_bounds": null,
+        "geographic_bounds": null,
+        "population": null
+      },
+      "identity": {
+        "author": "local",
+        "signed": false
+      },
+      "assumes": [],
+      "notes": "You can't build trust without knowing who you're trusting",
+      "created_at": 1773371143.4317083,
+      "id": "ab1b2179ce1dde2072768321843ad7dea0077217c9dd89f186eb818fcd66088d"
+    },
+    {
+      "subject": "epistemic-coordination",
+      "predicate": "requires",
+      "object": "shared-verifiable-facts",
+      "confidence": {
+        "level": 0.95,
+        "decomposition": null
+      },
+      "modality": "analytic",
+      "scope": {
+        "domain": "general",
+        "temporal_bounds": null,
+        "geographic_bounds": null,
+        "population": null
+      },
+      "identity": {
+        "author": "local",
+        "signed": false
+      },
+      "assumes": [],
+      "notes": "Coordination requires common ground; common ground requires shared facts",
+      "created_at": 1773371143.432811,
+      "id": "f74deb07b3bff3f2f912cf1b59bdb579c2225ecc31e6edb67eb30c576a6f5d18"
+    },
+    {
+      "subject": "captured-identity-systems",
+      "predicate": "prevent",
+      "object": "voluntary-coordination",
+      "confidence": {
+        "level": 0.8,
+        "decomposition": null
+      },
+      "modality": "empirical",
+      "scope": {
+        "domain": "general",
+        "temporal_bounds": null,
+        "geographic_bounds": null,
+        "population": null
+      },
+      "identity": {
+        "author": "local",
+        "signed": false
+      },
+      "assumes": [],
+      "notes": "When identity is controlled by platforms, coordination is limited to what platforms allow",
+      "created_at": 1773371143.433737,
+      "id": "77d099bfb34bf48bcad4a61eb8b85f57a725616d9efa624fff1b8e9eb8460f00"
+    },
+    {
+      "subject": "PKI-based-identity",
+      "predicate": "enables",
+      "object": "accountable-anonymity",
+      "confidence": {
+        "level": 0.75,
+        "decomposition": null
+      },
+      "modality": "empirical",
+      "scope": {
+        "domain": "general",
+        "temporal_bounds": null,
+        "geographic_bounds": null,
+        "population": null
+      },
+      "identity": {
+        "author": "local",
+        "signed": false
+      },
+      "assumes": [],
+      "notes": "Osmio's architecture: verify identity cryptographically without exposing it",
+      "created_at": 1773371143.4347136,
+      "id": "ea46955bcc51c880fc631aa98791c8e6c4ba4b79985ded790c49221df8e124ee"
+    },
+    {
+      "subject": "communities",
+      "predicate": "should-be-able-to",
+      "object": "fork-epistemic-foundations",
+      "confidence": {
+        "level": 0.8,
+        "decomposition": null
+      },
+      "modality": "normative",
+      "scope": {
+        "domain": "general",
+        "temporal_bounds": null,
+        "geographic_bounds": null,
+        "population": null
+      },
+      "identity": {
+        "author": "local",
+        "signed": false
+      },
+      "assumes": [],
+      "notes": "Like forking code \u2014 if a community disagrees about foundational assumptions, they should be able to fork and maintain their own branch",
+      "created_at": 1773371143.4357166,
+      "id": "b6364537f6dfab63cae3e019fe70cbb28dedcaf45d27f8d62f903c8496b75d7c"
+    },
+    {
+      "subject": "decentralized-knowledge-graphs",
+      "predicate": "can-serve-as",
+      "object": "epistemic-infrastructure",
+      "confidence": {
+        "level": 0.65,
+        "decomposition": null
+      },
+      "modality": "empirical",
+      "scope": {
+        "domain": "general",
+        "temporal_bounds": null,
+        "geographic_bounds": null,
+        "population": null
+      },
+      "identity": {
+        "author": "local",
+        "signed": false
+      },
+      "assumes": [],
+      "notes": "OriginTrail DKG as a possible substrate for knowledge asset verification",
+      "created_at": 1773371143.4368181,
+      "id": "640dbbbd771ef1fe4efa9939b0ac58f238a736a44ba232dcdbe378148affdefd"
+    },
+    {
+      "subject": "agent-commons",
+      "predicate": "requires",
+      "object": "mutual-discovery-without-pre-loaded-identity",
+      "confidence": {
+        "level": 0.7,
+        "decomposition": null
+      },
+      "modality": "empirical",
+      "scope": {
+        "domain": "general",
+        "temporal_bounds": null,
+        "geographic_bounds": null,
+        "population": null
+      },
+      "identity": {
+        "author": "local",
+        "signed": false
+      },
+      "assumes": [],
+      "notes": "",
+      "created_at": 1773371179.4711952,
+      "id": "1eafee486ded1e7cbe4aa46d8b11098aa0b4ab19b29d454aa727775fa296c9bf"
+    }
+  ],
+  "evidence": [
+    {
+      "title": "Replication crisis data",
+      "description": "Only 36% of psychology studies replicate (Open Science Collaboration, 2015)",
+      "evidence_type": "statistical",
+      "source": "Open Science Collaboration, Science 349(6251), 2015",
+      "reliability": 0.9,
+      "identity": {
+        "author": "local",
+        "signed": false
+      },
+      "notes": "",
+      "created_at": 1773371143.4378452,
+      "id": "12475701ac4995a285428f3aab4c76cd524926aa30bda4217a81208f5d3aebc7"
+    },
+    {
+      "title": "Ostrom commons governance",
+      "description": "Elinor Ostrom demonstrated that polycentric governance outperforms both pure market and pure state for commons management",
+      "evidence_type": "document",
+      "source": "Governing the Commons, 1990",
+      "reliability": 0.85,
+      "identity": {
+        "author": "local",
+        "signed": false
+      },
+      "notes": "",
+      "created_at": 1773371143.4659183,
+      "id": "c17f30491b70d5c60d413c440e080e61e7c8ef25729b7cb6dbbb848898188481"
+    },
+    {
+      "title": "Axelrod cooperation dynamics",
+      "description": "Robert Axelrod's tournament showed cooperation emerges from repeated interaction with known partners (identity \u2192 cooperation)",
+      "evidence_type": "experiment",
+      "source": "The Evolution of Cooperation, 1984",
+      "reliability": 0.85,
+      "identity": {
+        "author": "local",
+        "signed": false
+      },
+      "notes": "",
+      "created_at": 1773371143.4671366,
+      "id": "e39f75027f0b8275dbad08c56cd1dfb84274f1730ee13534e7b049cb1caa4443"
+    },
+    {
+      "title": "Osmio PKI operational history",
+      "description": "Osmio chartered at ITU Geneva 2005, operating PKI-based digital identity infrastructure as digital municipality",
+      "evidence_type": "document",
+      "source": "Osmio organizational documents",
+      "reliability": 0.8,
+      "identity": {
+        "author": "local",
+        "signed": false
+      },
+      "notes": "",
+      "created_at": 1773371143.468326,
+      "id": "3423a4a58afcb6828478db7c160249fc51b5a22d7b3e91d98bd765b32ae7343d"
+    },
+    {
+      "title": "Platform identity capture",
+      "description": "Facebook, Google, Twitter control identity for 4B+ users; deplatforming = identity death in those ecosystems",
+      "evidence_type": "observation",
+      "source": "",
+      "reliability": 0.75,
+      "identity": {
+        "author": "local",
+        "signed": false
+      },
+      "notes": "",
+      "created_at": 1773371143.4697936,
+      "id": "98bbd44d8b97f5af5136b4499e3a822390520ff4af447431e57f2d38a9c1ec93"
+    }
+  ],
+  "arguments": [
+    {
+      "conclusion": "900acbac401f7d4d518ee78017cb364379ac176853eb37b1953e7828983cd2de",
+      "premises": [
+        "12475701ac4995a285428f3aab4c76cd524926aa30bda4217a81208f5d3aebc7",
+        "f74deb07b3bff3f2f912cf1b59bdb579c2225ecc31e6edb67eb30c576a6f5d18"
+      ],
+      "pattern": "abduction",
+      "label": "Replication crisis as epistemic infrastructure failure",
+      "confidence": {
+        "level": 0.75,
+        "decomposition": null
+      },
+      "defeaters": [],
+      "identity": {
+        "author": "local",
+        "signed": false
+      },
+      "notes": "",
+      "created_at": 1773371143.4710324,
+      "id": "13a49be9c444209b249854ab29433bd3f8294998cfb092ef6d4e24cf0ebbc6f3"
+    },
+    {
+      "conclusion": "900acbac401f7d4d518ee78017cb364379ac176853eb37b1953e7828983cd2de",
+      "premises": [
+        "c17f30491b70d5c60d413c440e080e61e7c8ef25729b7cb6dbbb848898188481",
+        "ab1b2179ce1dde2072768321843ad7dea0077217c9dd89f186eb818fcd66088d"
+      ],
+      "pattern": "abduction",
+      "label": "Polycentric governance requires identity infrastructure",
+      "confidence": {
+        "level": 0.7,
+        "decomposition": null
+      },
+      "defeaters": [],
+      "identity": {
+        "author": "local",
+        "signed": false
+      },
+      "notes": "",
+      "created_at": 1773371143.4723804,
+      "id": "15d9c81dbae46178528bbc4838222918a9a3de5b7679f987304fa9f3c7e85d76"
+    },
+    {
+      "conclusion": "ab1b2179ce1dde2072768321843ad7dea0077217c9dd89f186eb818fcd66088d",
+      "premises": [
+        "e39f75027f0b8275dbad08c56cd1dfb84274f1730ee13534e7b049cb1caa4443"
+      ],
+      "pattern": "induction",
+      "label": "Axelrod: identity enables cooperation",
+      "confidence": {
+        "level": 0.8,
+        "decomposition": null
+      },
+      "defeaters": [],
+      "identity": {
+        "author": "local",
+        "signed": false
+      },
+      "notes": "",
+      "created_at": 1773371143.473644,
+      "id": "87c099632794e4ea8ec48e4dd80486e5bce00d88f5845e92a4971bfa2fb4139c"
+    },
+    {
+      "conclusion": "77d099bfb34bf48bcad4a61eb8b85f57a725616d9efa624fff1b8e9eb8460f00",
+      "premises": [
+        "98bbd44d8b97f5af5136b4499e3a822390520ff4af447431e57f2d38a9c1ec93"
+      ],
+      "pattern": "induction",
+      "label": "Platform monopoly evidence",
+      "confidence": {
+        "level": 0.75,
+        "decomposition": null
+      },
+      "defeaters": [],
+      "identity": {
+        "author": "local",
+        "signed": false
+      },
+      "notes": "",
+      "created_at": 1773371143.474943,
+      "id": "06e40647f8cd3094699cf22725690547feb43b72b4b924f37176fdc318c26c07"
+    },
+    {
+      "conclusion": "ea46955bcc51c880fc631aa98791c8e6c4ba4b79985ded790c49221df8e124ee",
+      "premises": [
+        "3423a4a58afcb6828478db7c160249fc51b5a22d7b3e91d98bd765b32ae7343d"
+      ],
+      "pattern": "testimony",
+      "label": "Osmio operational evidence",
+      "confidence": {
+        "level": 0.7,
+        "decomposition": null
+      },
+      "defeaters": [],
+      "identity": {
+        "author": "local",
+        "signed": false
+      },
+      "notes": "",
+      "created_at": 1773371143.4763422,
+      "id": "043c46d339813294bcaf970ebc8a54db222fb0591d6ae99c1a8c795e1c33e696"
+    },
+    {
+      "conclusion": "640dbbbd771ef1fe4efa9939b0ac58f238a736a44ba232dcdbe378148affdefd",
+      "premises": [
+        "ea46955bcc51c880fc631aa98791c8e6c4ba4b79985ded790c49221df8e124ee"
+      ],
+      "pattern": "analogy",
+      "label": "PKI + DKG as epistemic substrate",
+      "confidence": {
+        "level": 0.55,
+        "decomposition": null
+      },
+      "defeaters": [
+        {
+          "type": "undercutting",
+          "description": "DKG centralization concerns: OriginTrail's paranet structure may reproduce the centralization it claims to solve",
+          "status": "active",
+          "response": null
+        }
+      ],
+      "identity": {
+        "author": "local",
+        "signed": false
+      },
+      "notes": "",
+      "created_at": 1773371143.4777217,
+      "id": "4e4244ac88b48f4217f54dc2669ebc140cb635db6ea80fff84923df850f286d4"
+    },
+    {
+      "conclusion": "b6364537f6dfab63cae3e019fe70cbb28dedcaf45d27f8d62f903c8496b75d7c",
+      "premises": [
+        "c17f30491b70d5c60d413c440e080e61e7c8ef25729b7cb6dbbb848898188481",
+        "f74deb07b3bff3f2f912cf1b59bdb579c2225ecc31e6edb67eb30c576a6f5d18"
+      ],
+      "pattern": "abduction",
+      "label": "Communities should fork foundations (from Ostrom + epistemic coordination)",
+      "confidence": {
+        "level": 0.7,
+        "decomposition": null
+      },
+      "defeaters": [],
+      "identity": {
+        "author": "local",
+        "signed": false
+      },
+      "notes": "",
+      "created_at": 1773371143.479057,
+      "id": "00c02c61af479d9b4c7c5568e98f07fbabd08f226c7683074d70a6bb011f89d8"
+    }
+  ],
+  "evaluations": [],
+  "predictions": [],
+  "foundations": {}
+}
