@@ -30,6 +30,11 @@ export const deleteEvidence = (id) => request(`/evidence/${id}`, { method: "DELE
 export const getArguments = () => request("/arguments");
 export const createArgument = (data) => request("/arguments", { method: "POST", body: JSON.stringify(data) });
 export const deleteArgument = (id) => request(`/arguments/${id}`, { method: "DELETE" });
+export const getArgumentsForNode = (id) => request(`/arguments/for-node/${id}`);
+
+// Defeaters
+export const addDefeater = (argId, data) => request(`/arguments/${argId}/defeaters`, { method: "POST", body: JSON.stringify(data) });
+export const updateDefeater = (argId, idx, data) => request(`/arguments/${argId}/defeaters/${idx}`, { method: "PUT", body: JSON.stringify(data) });
 
 // Graph
 export const getGraph = () => request("/graph");
@@ -41,3 +46,6 @@ export const getBlindSpots = () => request("/analysis/blind-spots");
 export const getAssumptions = (id) => request(`/analysis/assumptions/${id}`);
 export const getStressTest = (id) => request(`/analysis/stress-test/${id}`);
 export const bayesianUpdate = (data) => request("/analysis/bayesian-update", { method: "POST", body: JSON.stringify(data) });
+
+// Summary
+export const getSummary = () => request("/summary");

@@ -60,6 +60,7 @@ class ClaimUpdate(BaseModel):
     confidence: Optional[float] = None
     modality: Optional[str] = None
     notes: Optional[str] = None
+    assumes: Optional[list[str]] = None
 
 class EvidenceCreate(BaseModel):
     title: str
@@ -75,6 +76,14 @@ class ArgumentCreate(BaseModel):
     pattern: str = "modus_ponens"
     label: str = ""
     confidence: float = 0.7
+
+class DefeaterCreate(BaseModel):
+    type: str = "undercutting"  # rebutting, undercutting, undermining
+    description: str
+
+class DefeaterUpdate(BaseModel):
+    status: str  # active, answered, withdrawn
+    response: Optional[str] = None
 
 class BayesianRequest(BaseModel):
     prior: float
@@ -142,6 +151,8 @@ def update_claim(eo_id: str, body: ClaimUpdate):
         c.modality = Modality(body.modality)
     if body.notes is not None:
         c.notes = body.notes
+    if body.assumes is not None:
+        c.assumes = body.assumes
     store.save()
     return _serialize(c)
 
@@ -226,6 +237,66 @@ def delete_argument(eo_id: str):
     if eo_id not in store.arguments:
         raise HTTPException(404, "Argument not found")
     del store.arguments[eo_id]
+    store.save()
+    return {"ok": True}
+
+
+@app.get("/api/arguments/for-node/{eo_id}")
+def arguments_for_node(eo_id: str):
+    """Return all arguments where this node is the conclusion or a premise."""
+    results = []
+    for aid, a in store.arguments.items():
+        if a.conclusion == eo_id or eo_id in a.premises:
+            results.append({
+                **_serialize(a),
+                "defeaters": [
+                    {"index": i, "type": d.type.value, "description": d.description,
+                     "status": d.status.value, "response": d.response}
+                    for i, d in enumerate(a.defeaters)
+                ],
+            })
+    return results
+
+
+# ── Defeater management ─────────────────────────────────────────────
+
+@app.get("/api/arguments/{eo_id}/defeaters")
+def list_defeaters(eo_id: str):
+    arg = store.arguments.get(eo_id)
+    if not arg:
+        raise HTTPException(404, "Argument not found")
+    return [
+        {"index": i, "type": d.type.value, "description": d.description,
+         "status": d.status.value, "response": d.response}
+        for i, d in enumerate(arg.defeaters)
+    ]
+
+
+@app.post("/api/arguments/{eo_id}/defeaters")
+def add_defeater(eo_id: str, body: DefeaterCreate):
+    arg = store.arguments.get(eo_id)
+    if not arg:
+        raise HTTPException(404, "Argument not found")
+    d = Defeater(
+        type=DefeaterType(body.type),
+        description=body.description,
+        status=DefeaterStatus.ACTIVE,
+    )
+    arg.defeaters.append(d)
+    store.save()
+    return {"ok": True, "index": len(arg.defeaters) - 1}
+
+
+@app.put("/api/arguments/{eo_id}/defeaters/{idx}")
+def update_defeater(eo_id: str, idx: int, body: DefeaterUpdate):
+    arg = store.arguments.get(eo_id)
+    if not arg:
+        raise HTTPException(404, "Argument not found")
+    if idx < 0 or idx >= len(arg.defeaters):
+        raise HTTPException(404, "Defeater not found")
+    arg.defeaters[idx].status = DefeaterStatus(body.status)
+    if body.response is not None:
+        arg.defeaters[idx].response = body.response
     store.save()
     return {"ok": True}
 
@@ -335,4 +406,176 @@ def bayesian(body: BayesianRequest):
         "prior": body.prior,
         "posterior": posterior,
         "delta": posterior - body.prior,
+    }
+
+
+# ── Summary / Export ─────────────────────────────────────────────────
+
+@app.get("/api/summary")
+def get_summary():
+    if not store.claims:
+        return {"markdown": "No claims yet.", "thesis": None}
+
+    atms = compute_atms(store)
+
+    # Find root thesis: claim with most incoming support arguments
+    support_count = {}
+    for a in store.arguments.values():
+        support_count[a.conclusion] = support_count.get(a.conclusion, 0) + 1
+    thesis_id = max(support_count, key=support_count.get) if support_count else next(iter(store.claims))
+    thesis = store.claims.get(thesis_id)
+    if not thesis:
+        thesis_id = next(iter(store.claims))
+        thesis = store.claims[thesis_id]
+
+    # Gather supporting arguments for thesis
+    supporting = []
+    for a in store.arguments.values():
+        if a.conclusion == thesis_id:
+            premises = []
+            for pid in a.premises:
+                p = store.get(pid)
+                if p:
+                    premises.append({
+                        "type": type(p).__name__.lower(),
+                        "label": f"{p.subject} {p.predicate} {p.object}" if hasattr(p, "subject") else getattr(p, "title", pid[:12]),
+                        "confidence": p.confidence.level if hasattr(p, "confidence") else getattr(p, "reliability", None),
+                        "notes": getattr(p, "notes", "") or getattr(p, "description", ""),
+                    })
+            supporting.append({
+                "label": a.label or "(unlabeled)",
+                "pattern": a.pattern.value,
+                "confidence": a.confidence.level,
+                "premises": premises,
+                "defeaters": [
+                    {"type": d.type.value, "description": d.description,
+                     "status": d.status.value, "response": d.response}
+                    for d in a.defeaters
+                ],
+            })
+
+    # All defeaters across all arguments
+    all_defeaters = []
+    for a in store.arguments.values():
+        for d in a.defeaters:
+            all_defeaters.append({
+                "type": d.type.value,
+                "description": d.description,
+                "status": d.status.value,
+                "response": d.response,
+                "argument_label": a.label or "(unlabeled)",
+            })
+
+    # Assumptions
+    assumptions = surface_assumptions(store, thesis_id)
+
+    # Issues
+    coherence = check_coherence(store)
+    blind_spots = find_blind_spots(store)
+
+    # Confidence assessment
+    arg_confidences = [a.confidence.level for a in store.arguments.values()]
+    claims_with_support = len(set(a.conclusion for a in store.arguments.values()))
+    active_defeaters = sum(1 for d in all_defeaters if d["status"] == "active")
+
+    assessment = {
+        "thesis_confidence": thesis.confidence.level,
+        "average_argument_strength": sum(arg_confidences) / len(arg_confidences) if arg_confidences else 0,
+        "claims_supported": f"{claims_with_support}/{len(store.claims)}",
+        "active_defeaters": active_defeaters,
+        "atms_status": atms.get(thesis_id, "unknown"),
+    }
+
+    # Build markdown
+    thesis_label = f"{thesis.subject} {thesis.predicate} {thesis.object}"
+    md = []
+    md.append(f"# {thesis.notes or thesis_label}")
+    md.append("")
+    md.append(f"**Thesis:** {thesis_label}")
+    md.append(f"**Confidence:** {thesis.confidence.level:.0%} | **ATMS:** {atms.get(thesis_id, 'unknown')}")
+    md.append("")
+
+    if supporting:
+        md.append("## Supporting Arguments")
+        md.append("")
+        for arg in supporting:
+            md.append(f"### {arg['label']}")
+            md.append(f"*Pattern: {arg['pattern']} | Confidence: {arg['confidence']:.0%}*")
+            md.append("")
+            for p in arg["premises"]:
+                conf_str = f" ({p['confidence']:.0%})" if p["confidence"] is not None else ""
+                md.append(f"- **{p['type'].title()}:** {p['label']}{conf_str}")
+                if p["notes"]:
+                    md.append(f"  - {p['notes']}")
+            if arg["defeaters"]:
+                md.append("")
+                for d in arg["defeaters"]:
+                    status_marker = "ACTIVE" if d["status"] == "active" else d["status"]
+                    md.append(f"- **Objection [{status_marker}]:** {d['description']}")
+                    if d["response"]:
+                        md.append(f"  - *Response:* {d['response']}")
+            md.append("")
+
+    active = [d for d in all_defeaters if d["status"] == "active"]
+    answered = [d for d in all_defeaters if d["status"] == "answered"]
+
+    if all_defeaters:
+        md.append("## Known Objections")
+        md.append("")
+        if active:
+            md.append("### Unresolved")
+            for d in active:
+                md.append(f"- [{d['type']}] {d['description']} *(on: {d['argument_label']})*")
+            md.append("")
+        if answered:
+            md.append("### Answered")
+            for d in answered:
+                md.append(f"- ~~{d['description']}~~ — {d['response'] or '(no response recorded)'}")
+            md.append("")
+
+    if assumptions:
+        md.append("## Assumptions")
+        md.append("")
+        for a in assumptions:
+            status = "supported" if a["supported"] else "**UNSUPPORTED**"
+            md.append(f"- {a['label']} [{a['type']}] — {status}")
+        md.append("")
+
+    if coherence or blind_spots:
+        md.append("## Unresolved Issues")
+        md.append("")
+        for iss in coherence:
+            md.append(f"- **{iss['severity'].upper()}** ({iss['check']}): {iss['message']}")
+        for sp in blind_spots:
+            md.append(f"- **{sp['risk'].upper()} RISK:** {sp['message']}")
+        md.append("")
+
+    if active:
+        md.append("## What Would Change My Mind")
+        md.append("")
+        for d in active:
+            md.append(f"- If {d['description'].lower()}")
+        md.append("")
+
+    md.append("## Confidence Assessment")
+    md.append("")
+    md.append(f"- **Thesis confidence:** {assessment['thesis_confidence']:.0%}")
+    md.append(f"- **Average argument strength:** {assessment['average_argument_strength']:.0%}")
+    md.append(f"- **Claims with support:** {assessment['claims_supported']}")
+    md.append(f"- **Active defeaters:** {assessment['active_defeaters']}")
+    md.append(f"- **Overall status:** {assessment['atms_status']}")
+
+    return {
+        "thesis": {
+            "label": thesis_label,
+            "notes": thesis.notes,
+            "confidence": thesis.confidence.level,
+            "atms_status": atms.get(thesis_id, "unknown"),
+        },
+        "supporting_arguments": supporting,
+        "objections": all_defeaters,
+        "assumptions": assumptions,
+        "unresolved_issues": {"coherence": coherence, "blind_spots": blind_spots},
+        "confidence_assessment": assessment,
+        "markdown": "\n".join(md),
     }

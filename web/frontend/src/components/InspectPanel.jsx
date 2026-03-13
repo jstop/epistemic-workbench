@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import * as api from "../api.js";
 
 const NODE_COLORS = {
@@ -13,8 +13,211 @@ const ATMS_COLORS = {
   unknown: "#555",
 };
 
+const DEFEATER_STATUS_COLORS = {
+  active: "#f87171",
+  answered: "#4ade80",
+  withdrawn: "#555",
+};
+
+function DefeaterSection({ arguments: args, onUpdated }) {
+  const [newDefeaterArg, setNewDefeaterArg] = useState(null);
+  const [newDesc, setNewDesc] = useState("");
+  const [newType, setNewType] = useState("undercutting");
+
+  const allDefeaters = args.flatMap((a) =>
+    (a.defeaters || []).map((d) => ({ ...d, argumentId: a.id, argumentLabel: a.label }))
+  );
+
+  const handleStatusChange = async (argId, idx, newStatus) => {
+    await api.updateDefeater(argId, idx, { status: newStatus });
+    onUpdated();
+  };
+
+  const handleAddDefeater = async () => {
+    if (!newDefeaterArg || !newDesc.trim()) return;
+    await api.addDefeater(newDefeaterArg, { type: newType, description: newDesc.trim() });
+    setNewDesc("");
+    setNewDefeaterArg(null);
+    onUpdated();
+  };
+
+  return (
+    <div>
+      <label style={{ fontSize: "9px", color: "#555", letterSpacing: "1px", textTransform: "uppercase", marginBottom: "6px", display: "block" }}>
+        Defeaters ({allDefeaters.length})
+      </label>
+
+      {allDefeaters.length === 0 && (
+        <div style={{ fontSize: "10px", color: "#444", fontStyle: "italic", marginBottom: "8px" }}>
+          No defeaters on supporting arguments
+        </div>
+      )}
+
+      {allDefeaters.map((d, i) => {
+        const statusColor = DEFEATER_STATUS_COLORS[d.status] || "#555";
+        return (
+          <div key={i} style={{
+            padding: "8px", background: "#141414", borderRadius: "4px",
+            borderLeft: `3px solid ${statusColor}`, marginBottom: "6px",
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "4px" }}>
+              <span style={{ fontSize: "9px", color: statusColor, textTransform: "uppercase", letterSpacing: "1px" }}>
+                {d.type} · {d.status}
+              </span>
+            </div>
+            <div style={{ fontSize: "10px", color: "#ccc", lineHeight: "1.4", marginBottom: "6px" }}>
+              {d.description}
+            </div>
+            {d.response && (
+              <div style={{ fontSize: "10px", color: "#4ade80", lineHeight: "1.4", marginBottom: "6px", paddingLeft: "8px", borderLeft: "2px solid #333" }}>
+                Response: {d.response}
+              </div>
+            )}
+            <div style={{ fontSize: "9px", color: "#444", marginBottom: "4px" }}>
+              on: {d.argumentLabel || d.argumentId.slice(0, 12) + "…"}
+            </div>
+            <div style={{ display: "flex", gap: "4px" }}>
+              {d.status === "active" && (
+                <>
+                  <button
+                    onClick={() => {
+                      const response = prompt("How is this defeater answered?");
+                      if (response !== null) {
+                        api.updateDefeater(d.argumentId, d.index, { status: "answered", response }).then(onUpdated);
+                      }
+                    }}
+                    style={{
+                      background: "#4ade8022", border: "1px solid #4ade80", color: "#4ade80",
+                      borderRadius: "3px", padding: "3px 8px", fontSize: "9px", cursor: "pointer",
+                      fontFamily: "'JetBrains Mono', monospace",
+                    }}
+                  >
+                    ANSWER
+                  </button>
+                  <button
+                    onClick={() => handleStatusChange(d.argumentId, d.index, "withdrawn")}
+                    style={{
+                      background: "transparent", border: "1px solid #333", color: "#666",
+                      borderRadius: "3px", padding: "3px 8px", fontSize: "9px", cursor: "pointer",
+                      fontFamily: "'JetBrains Mono', monospace",
+                    }}
+                  >
+                    WITHDRAW
+                  </button>
+                </>
+              )}
+              {d.status !== "active" && (
+                <button
+                  onClick={() => handleStatusChange(d.argumentId, d.index, "active")}
+                  style={{
+                    background: "#f8717122", border: "1px solid #f87171", color: "#f87171",
+                    borderRadius: "3px", padding: "3px 8px", fontSize: "9px", cursor: "pointer",
+                    fontFamily: "'JetBrains Mono', monospace",
+                  }}
+                >
+                  REACTIVATE
+                </button>
+              )}
+            </div>
+          </div>
+        );
+      })}
+
+      {/* Add defeater */}
+      {args.length > 0 && (
+        <div style={{ marginTop: "6px" }}>
+          {newDefeaterArg === null ? (
+            <button
+              onClick={() => setNewDefeaterArg(args[0].id)}
+              style={{
+                background: "transparent", border: "1px solid #333", color: "#888",
+                borderRadius: "3px", padding: "6px", fontSize: "9px", cursor: "pointer",
+                fontFamily: "'JetBrains Mono', monospace", width: "100%",
+                textTransform: "uppercase", letterSpacing: "1px",
+              }}
+            >
+              + Add Defeater
+            </button>
+          ) : (
+            <div style={{ background: "#141414", borderRadius: "4px", padding: "8px", display: "flex", flexDirection: "column", gap: "6px" }}>
+              {args.length > 1 && (
+                <select
+                  value={newDefeaterArg} onChange={(e) => setNewDefeaterArg(e.target.value)}
+                  style={{
+                    background: "#0A0A0A", border: "1px solid #222", borderRadius: "3px",
+                    color: "#e0e0e0", padding: "6px", fontSize: "10px",
+                    fontFamily: "'JetBrains Mono', monospace",
+                  }}
+                >
+                  {args.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.label || a.id.slice(0, 12) + "…"}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <select
+                value={newType} onChange={(e) => setNewType(e.target.value)}
+                style={{
+                  background: "#0A0A0A", border: "1px solid #222", borderRadius: "3px",
+                  color: "#e0e0e0", padding: "6px", fontSize: "10px",
+                  fontFamily: "'JetBrains Mono', monospace",
+                }}
+              >
+                <option value="undercutting">undercutting</option>
+                <option value="rebutting">rebutting</option>
+                <option value="undermining">undermining</option>
+              </select>
+              <input
+                value={newDesc} onChange={(e) => setNewDesc(e.target.value)}
+                placeholder="What challenges this argument?"
+                onKeyDown={(e) => e.key === "Enter" && handleAddDefeater()}
+                style={{
+                  background: "#0A0A0A", border: "1px solid #222", borderRadius: "3px",
+                  color: "#e0e0e0", padding: "6px", fontSize: "10px",
+                  fontFamily: "'JetBrains Mono', monospace", outline: "none",
+                }}
+              />
+              <div style={{ display: "flex", gap: "4px" }}>
+                <button
+                  onClick={handleAddDefeater}
+                  disabled={!newDesc.trim()}
+                  style={{
+                    flex: 1, background: newDesc.trim() ? "#FF6B35" : "#222",
+                    color: newDesc.trim() ? "#0A0A0A" : "#555",
+                    border: "none", borderRadius: "3px", padding: "6px",
+                    fontSize: "9px", cursor: newDesc.trim() ? "pointer" : "default",
+                    fontFamily: "'JetBrains Mono', monospace", fontWeight: 600,
+                  }}
+                >
+                  ADD
+                </button>
+                <button
+                  onClick={() => { setNewDefeaterArg(null); setNewDesc(""); }}
+                  style={{
+                    background: "transparent", border: "1px solid #333", color: "#666",
+                    borderRadius: "3px", padding: "6px", fontSize: "9px", cursor: "pointer",
+                    fontFamily: "'JetBrains Mono', monospace",
+                  }}
+                >
+                  CANCEL
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function InspectPanel({ node, edges, allNodes, onUpdated, onSelectNode }) {
-  const [editing, setEditing] = useState(false);
+  const [relatedArgs, setRelatedArgs] = useState([]);
+
+  useEffect(() => {
+    if (!node) { setRelatedArgs([]); return; }
+    api.getArgumentsForNode(node.id).then(setRelatedArgs).catch(() => setRelatedArgs([]));
+  }, [node?.id]);
 
   if (!node) {
     return (
@@ -56,6 +259,9 @@ export default function InspectPanel({ node, edges, allNodes, onUpdated, onSelec
       onUpdated();
     }
   };
+
+  // Arguments that conclude this node (for defeater management)
+  const supportingArgs = relatedArgs.filter((a) => a.conclusion === node.id);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
@@ -152,6 +358,17 @@ export default function InspectPanel({ node, edges, allNodes, onUpdated, onSelec
           })
         )}
       </div>
+
+      {/* Defeaters */}
+      {node.type === "claim" && (
+        <DefeaterSection
+          arguments={supportingArgs}
+          onUpdated={() => {
+            api.getArgumentsForNode(node.id).then(setRelatedArgs).catch(() => {});
+            onUpdated();
+          }}
+        />
+      )}
 
       {/* ID */}
       <div>

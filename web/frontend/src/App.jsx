@@ -3,6 +3,8 @@ import Graph from "./components/Graph.jsx";
 import AddPanel from "./components/AddPanel.jsx";
 import InspectPanel from "./components/InspectPanel.jsx";
 import AnalysisPanel from "./components/AnalysisPanel.jsx";
+import SummaryPanel from "./components/SummaryPanel.jsx";
+import GuidedFlow from "./components/GuidedFlow.jsx";
 import * as api from "./api.js";
 
 export default function App() {
@@ -12,6 +14,8 @@ export default function App() {
   const [highlightIds, setHighlightIds] = useState([]);
   const [panel, setPanel] = useState("add");
   const [analysisKey, setAnalysisKey] = useState(0);
+  const [showGuided, setShowGuided] = useState(false);
+  const [initialLoad, setInitialLoad] = useState(true);
 
   const fetchAll = useCallback(async () => {
     try {
@@ -19,10 +23,15 @@ export default function App() {
       setGraph(g);
       setWorkspace(w);
       setAnalysisKey((k) => k + 1);
+      // Show guided flow if workspace is empty on first load
+      if (initialLoad) {
+        setInitialLoad(false);
+        if (g.nodes.length === 0) setShowGuided(true);
+      }
     } catch (err) {
       console.error("Failed to fetch:", err);
     }
-  }, []);
+  }, [initialLoad]);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
@@ -30,10 +39,7 @@ export default function App() {
 
   const handleSelectNode = (id) => {
     setSelectedId(id);
-    const node = graph.nodes.find((n) => n.id === id);
-    if (node && node.type === "claim") {
-      setPanel("inspect");
-    }
+    setPanel("inspect");
   };
 
   const handleAdded = () => {
@@ -41,7 +47,18 @@ export default function App() {
   };
 
   const stats = workspace?.stats;
-  const totalIssues = 0; // computed in AnalysisPanel
+
+  // Find the root thesis: the claim that is the target of the most support edges
+  const thesis = (() => {
+    if (graph.nodes.length === 0) return null;
+    const supportCount = {};
+    graph.edges.forEach((e) => {
+      const tgt = e.target?.id || e.target;
+      if (e.type === "supports") supportCount[tgt] = (supportCount[tgt] || 0) + 1;
+    });
+    const topId = Object.entries(supportCount).sort((a, b) => b[1] - a[1])[0]?.[0];
+    return graph.nodes.find((n) => n.id === topId);
+  })();
 
   return (
     <div style={{
@@ -54,22 +71,39 @@ export default function App() {
         display: "flex", alignItems: "center", justifyContent: "space-between",
         padding: "10px 16px", borderBottom: "1px solid #1a1a1a", flexShrink: 0,
       }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-          <span style={{ fontSize: "10px", letterSpacing: "3px", color: "#FF6B35", textTransform: "uppercase" }}>
-            Epistemic Workbench
+        <div style={{ display: "flex", alignItems: "center", gap: "12px", minWidth: 0, flex: 1 }}>
+          <span style={{ fontSize: "10px", letterSpacing: "3px", color: "#FF6B35", textTransform: "uppercase", flexShrink: 0 }}>
+            Workbench
           </span>
-          {workspace && (
-            <span style={{ fontSize: "10px", color: "#444" }}>
-              {workspace.home}
+          {thesis && (
+            <span
+              onClick={() => handleSelectNode(thesis.id)}
+              style={{
+                fontSize: "12px", color: "#e0e0e0", cursor: "pointer",
+                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+              }}
+              title={thesis.notes || thesis.label}
+            >
+              {thesis.notes || thesis.label}
             </span>
           )}
         </div>
-        <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+        <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
           {stats && (
             <span style={{ fontSize: "10px", color: "#555" }}>
-              {stats.claims} claims · {stats.evidence} evidence · {stats.arguments} arguments
+              {stats.claims}c · {stats.evidence}e · {stats.arguments}a
             </span>
           )}
+          <button
+            onClick={() => setShowGuided(true)}
+            style={{
+              background: "#FF6B3522", border: "1px solid #FF6B35", borderRadius: "3px",
+              color: "#FF6B35", padding: "4px 10px", fontSize: "9px", cursor: "pointer",
+              fontFamily: "'JetBrains Mono', monospace", letterSpacing: "1px",
+            }}
+          >
+            + NEW
+          </button>
           <button
             onClick={fetchAll}
             style={{
@@ -121,52 +155,68 @@ export default function App() {
           width: "340px", borderLeft: "1px solid #1a1a1a", display: "flex",
           flexDirection: "column", flexShrink: 0, overflow: "hidden",
         }}>
-          {/* Tabs */}
-          <div style={{ display: "flex", borderBottom: "1px solid #1a1a1a", flexShrink: 0 }}>
-            {[
-              { key: "add", label: "Add" },
-              { key: "inspect", label: "Inspect" },
-              { key: "analysis", label: "Analysis" },
-            ].map((tab) => (
-              <button
-                key={tab.key}
-                onClick={() => setPanel(tab.key)}
-                style={{
-                  flex: 1, background: panel === tab.key ? "#141414" : "transparent",
-                  border: "none", borderBottom: panel === tab.key ? "2px solid #FF6B35" : "2px solid transparent",
-                  color: panel === tab.key ? "#FF6B35" : "#555", padding: "10px 0",
-                  fontSize: "10px", cursor: "pointer", fontFamily: "'JetBrains Mono', monospace",
-                  letterSpacing: "1px", textTransform: "uppercase",
-                }}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
+          {showGuided ? (
+            /* Guided flow replaces the entire side panel */
+            <div style={{ flex: 1, overflow: "auto", padding: "14px" }}>
+              <GuidedFlow
+                onAdded={handleAdded}
+                onComplete={() => { setShowGuided(false); setPanel("analysis"); }}
+              />
+            </div>
+          ) : (
+            <>
+              {/* Tabs */}
+              <div style={{ display: "flex", borderBottom: "1px solid #1a1a1a", flexShrink: 0 }}>
+                {[
+                  { key: "add", label: "Add" },
+                  { key: "inspect", label: "Inspect" },
+                  { key: "analysis", label: "Analysis" },
+                  { key: "summary", label: "Summary" },
+                ].map((tab) => (
+                  <button
+                    key={tab.key}
+                    onClick={() => setPanel(tab.key)}
+                    style={{
+                      flex: 1, background: panel === tab.key ? "#141414" : "transparent",
+                      border: "none", borderBottom: panel === tab.key ? "2px solid #FF6B35" : "2px solid transparent",
+                      color: panel === tab.key ? "#FF6B35" : "#555", padding: "10px 0",
+                      fontSize: "10px", cursor: "pointer", fontFamily: "'JetBrains Mono', monospace",
+                      letterSpacing: "1px", textTransform: "uppercase",
+                    }}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
 
-          {/* Panel content */}
-          <div style={{ flex: 1, overflow: "auto", padding: "14px" }}>
-            {panel === "add" && (
-              <AddPanel graphNodes={graph.nodes} onAdded={handleAdded} />
-            )}
-            {panel === "inspect" && (
-              <InspectPanel
-                node={selectedNode}
-                edges={graph.edges}
-                allNodes={graph.nodes}
-                onUpdated={fetchAll}
-                onSelectNode={handleSelectNode}
-              />
-            )}
-            {panel === "analysis" && (
-              <AnalysisPanel
-                key={analysisKey}
-                selectedId={selectedId}
-                onSelectNode={(id) => { setSelectedId(id); setPanel("inspect"); }}
-                onHighlight={setHighlightIds}
-              />
-            )}
-          </div>
+              {/* Panel content */}
+              <div style={{ flex: 1, overflow: "auto", padding: "14px" }}>
+                {panel === "add" && (
+                  <AddPanel graphNodes={graph.nodes} onAdded={handleAdded} />
+                )}
+                {panel === "inspect" && (
+                  <InspectPanel
+                    node={selectedNode}
+                    edges={graph.edges}
+                    allNodes={graph.nodes}
+                    onUpdated={fetchAll}
+                    onSelectNode={handleSelectNode}
+                  />
+                )}
+                {panel === "analysis" && (
+                  <AnalysisPanel
+                    key={analysisKey}
+                    selectedId={selectedId}
+                    onSelectNode={(id) => { setSelectedId(id); setPanel("inspect"); }}
+                    onHighlight={setHighlightIds}
+                  />
+                )}
+                {panel === "summary" && (
+                  <SummaryPanel />
+                )}
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>
