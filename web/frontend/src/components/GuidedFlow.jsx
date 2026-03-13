@@ -69,6 +69,8 @@ export default function GuidedFlow({ onAdded, onComplete }) {
   const [step, setStep] = useState(0);
   const [input, setInput] = useState("");
   const [creating, setCreating] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [genError, setGenError] = useState(null);
 
   // Track created IDs for wiring
   const [thesisId, setThesisId] = useState(null);
@@ -76,6 +78,22 @@ export default function GuidedFlow({ onAdded, onComplete }) {
   const [mainArgId, setMainArgId] = useState(null);
 
   const canSubmit = input.trim().length > 0;
+
+  const handleAutoGenerate = async () => {
+    if (!canSubmit || generating) return;
+    setGenerating(true);
+    setGenError(null);
+    try {
+      await api.generate(input.trim());
+      onAdded();
+      onComplete();
+    } catch (err) {
+      console.error("Auto-generate error:", err);
+      setGenError(err.message || "Generation failed");
+    } finally {
+      setGenerating(false);
+    }
+  };
 
   const handleSubmit = async () => {
     if (!canSubmit || creating) return;
@@ -205,8 +223,42 @@ export default function GuidedFlow({ onAdded, onComplete }) {
         }}
       />
 
+      {/* Auto-generate option on step 0 */}
+      {step === 0 && (
+        <>
+          <button
+            onClick={handleAutoGenerate}
+            disabled={!canSubmit || generating}
+            style={{
+              width: "100%", marginTop: "12px",
+              background: canSubmit ? "#FF6B35" : "#222",
+              color: canSubmit ? "#0A0A0A" : "#555",
+              border: "none", borderRadius: "3px", padding: "12px",
+              fontSize: "11px", cursor: canSubmit ? "pointer" : "default",
+              fontFamily: "'JetBrains Mono', monospace", fontWeight: 600,
+              letterSpacing: "1px",
+            }}
+          >
+            {generating ? "GENERATING..." : "AUTO-GENERATE"}
+          </button>
+          {generating && (
+            <div style={{ fontSize: "9px", color: "#555", textAlign: "center", marginTop: "6px" }}>
+              Decomposing thesis into claims, evidence, arguments...
+            </div>
+          )}
+          {genError && (
+            <div style={{ fontSize: "9px", color: "#f87171", textAlign: "center", marginTop: "6px" }}>
+              {genError}
+            </div>
+          )}
+          <div style={{ fontSize: "9px", color: "#333", textAlign: "center", marginTop: "8px" }}>
+            — or build manually —
+          </div>
+        </>
+      )}
+
       {/* Buttons */}
-      <div style={{ display: "flex", gap: "8px", marginTop: "12px" }}>
+      <div style={{ display: "flex", gap: "8px", marginTop: step === 0 ? "4px" : "12px" }}>
         {step > 0 && (
           <button
             onClick={() => { setStep(step - 1); setInput(""); }}
@@ -221,17 +273,17 @@ export default function GuidedFlow({ onAdded, onComplete }) {
         )}
         <button
           onClick={handleSubmit}
-          disabled={!canSubmit || creating}
+          disabled={!canSubmit || creating || generating}
           style={{
-            flex: 1, background: canSubmit ? "#FF6B35" : "#222",
-            color: canSubmit ? "#0A0A0A" : "#555",
-            border: "none", borderRadius: "3px", padding: "10px",
+            flex: 1, background: step === 0 ? "#222" : canSubmit ? "#FF6B35" : "#222",
+            color: step === 0 ? (canSubmit ? "#aaa" : "#555") : (canSubmit ? "#0A0A0A" : "#555"),
+            border: step === 0 ? "1px solid #333" : "none", borderRadius: "3px", padding: "10px",
             fontSize: "11px", cursor: canSubmit ? "pointer" : "default",
             fontFamily: "'JetBrains Mono', monospace", fontWeight: 600,
             letterSpacing: "1px",
           }}
         >
-          {creating ? "…" : step === STEPS.length - 1 ? "FINISH" : "CONTINUE"}
+          {creating ? "…" : step === 0 ? "MANUAL STEP-BY-STEP" : step === STEPS.length - 1 ? "FINISH" : "CONTINUE"}
         </button>
         {step > 0 && (
           <button

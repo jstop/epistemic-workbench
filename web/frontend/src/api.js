@@ -48,4 +48,8 @@ export const getStressTest = (id) => request(`/analysis/stress-test/${id}`);
 export const bayesianUpdate = (data) => request("/analysis/bayesian-update", { method: "POST", body: JSON.stringify(data) });
 
 // Summary
-export const getSummary = () => request("/summary");
+export const getTheses = () => request("/summary/theses");
+export const getSummary = (thesisId) => request(`/summary${thesisId ? `?thesis_id=${thesisId}` : ""}`);
+
+// Auto-generate
+export const generate = (thesis) => request("/generate", { method: "POST", body: JSON.stringify({ thesis }) });

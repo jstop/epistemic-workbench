@@ -3,18 +3,29 @@ import * as api from "../api.js";
 
 export default function SummaryPanel() {
   const [summary, setSummary] = useState(null);
+  const [theses, setTheses] = useState([]);
+  const [selectedThesis, setSelectedThesis] = useState(null);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
 
-  const fetch = () => {
+  const fetchTheses = () => {
+    api.getTheses().then(setTheses).catch(() => setTheses([]));
+  };
+
+  const fetch = (thesisId) => {
     setLoading(true);
-    api.getSummary()
+    api.getSummary(thesisId || selectedThesis)
       .then(setSummary)
       .catch(() => setSummary(null))
       .finally(() => setLoading(false));
   };
 
-  useEffect(fetch, []);
+  useEffect(() => { fetchTheses(); fetch(); }, []);
+
+  const handleSelectThesis = (id) => {
+    setSelectedThesis(id);
+    fetch(id);
+  };
 
   const handleCopy = async () => {
     if (!summary?.markdown) return;
@@ -53,6 +64,32 @@ export default function SummaryPanel() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+      {/* Thesis selector */}
+      {theses.length > 1 && (
+        <div>
+          <div style={{ fontSize: "9px", color: "#555", letterSpacing: "1px", textTransform: "uppercase", marginBottom: "4px" }}>
+            Select Thesis
+          </div>
+          <select
+            value={selectedThesis || ""}
+            onChange={(e) => handleSelectThesis(e.target.value || null)}
+            style={{
+              width: "100%", background: "#141414", border: "1px solid #222",
+              borderRadius: "3px", color: "#e0e0e0", padding: "8px",
+              fontSize: "11px", fontFamily: "'JetBrains Mono', monospace",
+              outline: "none", cursor: "pointer",
+            }}
+          >
+            <option value="">Auto (most supported)</option>
+            {theses.map((t) => (
+              <option key={t.id} value={t.id}>
+                {(t.notes || t.label).slice(0, 60)}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
       {/* Actions */}
       <div style={{ display: "flex", gap: "6px" }}>
         <button onClick={handleCopy} style={{
@@ -71,7 +108,7 @@ export default function SummaryPanel() {
         }}>
           DOWNLOAD
         </button>
-        <button onClick={fetch} style={{
+        <button onClick={() => { fetchTheses(); fetch(); }} style={{
           background: "#141414", border: "1px solid #222", borderRadius: "3px",
           color: "#666", padding: "6px 10px", fontSize: "9px",
           cursor: "pointer", fontFamily: "'JetBrains Mono', monospace",
