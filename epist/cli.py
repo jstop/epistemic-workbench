@@ -462,6 +462,252 @@ def export_cmd(ctx, fmt, output):
     console.print(f"[green]✓[/green] Exported {len(s.all_objects())} objects to {output}")
 
 
+# ── Manual intervention commands ──────────────────────────────────────
+
+def _git_commit_manual(s, message):
+    """Commit with [manual] tag if workspace is git-backed."""
+    if s.is_git_repo():
+        s.git_commit(f"[manual] {message}")
+
+
+def _find_root_thesis(s):
+    """Find the root thesis claim in the store."""
+    for c in s.claims.values():
+        if c.is_root:
+            return c
+    return None
+
+
+@cli.command("respond")
+@click.argument("arg_id")
+@click.argument("response")
+@click.option("--defeater", "-d", type=int, default=None, help="Defeater index (default: first active)")
+@click.pass_context
+def respond(ctx, arg_id, response, defeater):
+    """Respond to a defeater on an argument, marking it answered."""
+    s = get_store(ctx.obj["home"])
+    obj = s.get(arg_id)
+    if not obj or not hasattr(obj, 'defeaters'):
+        console.print(f"[red]Argument not found: {arg_id}[/red]")
+        return
+
+    # Find the target defeater
+    if defeater is not None:
+        if defeater < 0 or defeater >= len(obj.defeaters):
+            console.print(f"[red]Defeater index {defeater} out of range (0-{len(obj.defeaters)-1})[/red]")
+            return
+        d = obj.defeaters[defeater]
+    else:
+        # First active defeater
+        d = next((d for d in obj.defeaters if d.status == DefeaterStatus.ACTIVE), None)
+        if not d:
+            console.print("[dim]No active defeaters on this argument.[/dim]")
+            return
+
+    d.status = DefeaterStatus.ANSWERED
+    d.response = response
+    s.save()
+
+    _git_commit_manual(s, f"Respond to defeater: {d.description[:50]}")
+
+    console.print(f"[green]✓[/green] Defeater marked answered")
+    console.print(f"  [dim]{d.type.value}:[/dim] {d.description[:80]}")
+    console.print(f"  [green]Response:[/green] {response}")
+
+    # Show updated ATMS
+    atms = compute_atms(s)
+    thesis = _find_root_thesis(s)
+    if thesis:
+        st = atms.get(thesis.id, "unknown")
+        console.print(f"\n  Thesis status: [bold]{st}[/bold]")
+
+
+@cli.command("add-evidence")
+@click.argument("claim_id")
+@click.option("--title", "-t", required=True)
+@click.option("--description", "-d", required=True)
+@click.option("--source", "-s", default="")
+@click.option("--type", "etype", type=click.Choice([e.value for e in EvidenceType]), default="observation")
+@click.option("--reliability", "-r", type=float, default=0.7)
+@click.option("--pattern", type=click.Choice([p.value for p in InferencePattern]), default="induction")
+@click.pass_context
+def add_evidence_cmd(ctx, claim_id, title, description, source, etype, reliability, pattern):
+    """Attach new evidence to a specific claim via a supporting argument."""
+    s = get_store(ctx.obj["home"])
+    target = s.get(claim_id)
+    if not target:
+        console.print(f"[red]Claim not found: {claim_id}[/red]")
+        return
+
+    # Create evidence
+    e = Evidence(
+        title=title, description=description,
+        evidence_type=EvidenceType(etype),
+        source=source, reliability=reliability,
+    )
+    s.add_evidence(e)
+
+    # Create supporting argument linking evidence to claim
+    a = Argument(
+        conclusion=target.id,
+        premises=[e.id],
+        pattern=InferencePattern(pattern),
+        label=f"Evidence: {title}",
+        confidence=Confidence(reliability),
+    )
+    s.add_argument(a)
+
+    _git_commit_manual(s, f"Add evidence: {title}")
+
+    console.print(f"[green]✓[/green] Added evidence [cyan]{short_id(e.id)}[/cyan]: {title}")
+    console.print(f"  Linked to [cyan]{short_id(target.id)}[/cyan] via argument [cyan]{short_id(a.id)}[/cyan]")
+
+    # Show updated ATMS
+    atms = compute_atms(s)
+    target_status = atms.get(target.id, "unknown")
+    console.print(f"  Claim status: [bold]{target_status}[/bold]")
+
+
+@cli.command("challenge")
+@click.argument("claim_id")
+@click.option("--type", "dtype", type=click.Choice([d.value for d in DefeaterType]), default="undercutting")
+@click.option("--description", "-d", required=True)
+@click.pass_context
+def challenge(ctx, claim_id, dtype, description):
+    """Add a defeater/challenge to arguments supporting a claim."""
+    s = get_store(ctx.obj["home"])
+    target = s.get(claim_id)
+    if not target:
+        console.print(f"[red]Claim not found: {claim_id}[/red]")
+        return
+
+    # Find arguments that conclude this claim
+    supporting_args = [a for a in s.arguments.values() if a.conclusion == target.id]
+    if not supporting_args:
+        console.print(f"[yellow]No supporting arguments found for this claim. Adding as a general challenge.[/yellow]")
+        # Create a dummy argument to hang the defeater on if none exists
+        # Actually, better to just inform the user
+        console.print("[dim]Use 'argument new' to create an argument first, then challenge it.[/dim]")
+        return
+
+    # Add defeater to the strongest supporting argument
+    arg = max(supporting_args, key=lambda a: a.confidence.level)
+    arg.defeaters.append(Defeater(
+        type=DefeaterType(dtype),
+        description=description,
+        status=DefeaterStatus.ACTIVE,
+    ))
+    s.save()
+
+    _git_commit_manual(s, f"Challenge: {description[:50]}")
+
+    console.print(f"[green]✓[/green] Added {dtype} defeater to argument [cyan]{short_id(arg.id)}[/cyan]")
+    console.print(f"  {arg.label or '(unlabeled)'}")
+    console.print(f"  [red]Challenge:[/red] {description}")
+
+    atms = compute_atms(s)
+    target_status = atms.get(target.id, "unknown")
+    console.print(f"\n  Claim status: [bold]{target_status}[/bold]")
+
+
+@cli.command("set-confidence")
+@click.argument("claim_id")
+@click.argument("value", type=float)
+@click.option("--note", "-n", default="", help="Reason for the adjustment")
+@click.pass_context
+def set_confidence(ctx, claim_id, value, note):
+    """Manually set confidence on a claim."""
+    s = get_store(ctx.obj["home"])
+    target = s.get(claim_id)
+    if not target or not hasattr(target, 'confidence'):
+        console.print(f"[red]Claim not found: {claim_id}[/red]")
+        return
+
+    old_val = target.confidence.level
+    target.confidence = Confidence(value)
+    if note:
+        existing = target.notes or ""
+        target.notes = f"{existing}\n[{value:.0%}] {note}".strip() if existing else f"[{value:.0%}] {note}"
+    s.save()
+
+    label = f"{target.subject} {target.predicate} {target.object}" if hasattr(target, 'subject') else short_id(target.id)
+    _git_commit_manual(s, f"Set confidence {old_val:.0%} -> {value:.0%}: {label[:40]}")
+
+    console.print(f"[green]✓[/green] Updated confidence: {old_val:.0%} → [bold]{value:.0%}[/bold]")
+    console.print(f"  {label}")
+    if note:
+        console.print(f"  [dim]{note}[/dim]")
+
+
+@cli.command("graph")
+@click.pass_context
+def graph_cmd(ctx):
+    """Show the argument graph structure for the current thesis."""
+    s = get_store(ctx.obj["home"])
+    thesis = _find_root_thesis(s)
+    if not thesis:
+        console.print("[dim]No thesis found.[/dim]")
+        return
+
+    atms = compute_atms(s)
+    atms_colors = {"accepted": "green", "provisional": "yellow", "defeated": "red", "unknown": "dim"}
+
+    thesis_label = thesis.notes or f"{thesis.subject} {thesis.predicate} {thesis.object}"
+    if len(thesis_label) > 80:
+        thesis_label = thesis_label[:77] + "..."
+    st = atms.get(thesis.id, "unknown")
+    tree = Tree(f"[bold]{thesis_label}[/bold] [{atms_colors.get(st, 'white')}][{st}][/{atms_colors.get(st, 'white')}]")
+
+    def add_node(parent_tree, node_id, depth=0):
+        if depth > 5:
+            return
+        for arg in s.arguments.values():
+            if arg.conclusion == node_id:
+                arg_st = atms.get(arg.id, "unknown")
+                c = atms_colors.get(arg_st, "white")
+                defeater_count = sum(1 for d in arg.defeaters if d.status == DefeaterStatus.ACTIVE)
+                defeater_str = f" [red]({defeater_count} defeaters)[/red]" if defeater_count else ""
+                arg_branch = parent_tree.add(
+                    f"[{c}]← {arg.label or '(argument)'}[/{c}] "
+                    f"[dim]{arg.pattern.value} {arg.confidence.level:.0%}[/dim]{defeater_str}"
+                )
+                for pid in arg.premises:
+                    p = s.get(pid)
+                    if not p:
+                        continue
+                    p_st = atms.get(pid, "unknown")
+                    pc = atms_colors.get(p_st, "white")
+                    if hasattr(p, 'subject'):
+                        plabel = f"{p.subject} {p.predicate} {p.object}"
+                        ptype = "claim"
+                        pconf = f"{p.confidence.level:.0%}"
+                    else:
+                        plabel = p.title
+                        ptype = "evidence"
+                        pconf = f"{p.reliability:.0%}"
+                    premise_node = arg_branch.add(
+                        f"[{pc}]{plabel}[/{pc}] [dim]({ptype} {pconf})[/dim]"
+                    )
+                    if ptype == "claim":
+                        add_node(premise_node, pid, depth + 1)
+
+    add_node(tree, thesis.id)
+
+    # Show assumptions
+    if thesis.assumes:
+        assume_branch = tree.add("[dim]Assumptions[/dim]")
+        for aid in thesis.assumes:
+            a = s.get(aid)
+            if a:
+                a_st = atms.get(aid, "unknown")
+                ac = atms_colors.get(a_st, "white")
+                assume_branch.add(f"[{ac}]{a.subject} {a.predicate} {a.object}[/{ac}] [dim]({a.confidence.level:.0%})[/dim]")
+
+    console.print()
+    console.print(tree)
+    console.print()
+
+
 # ── LLM-powered commands ─────────────────────────────────────────────
 
 @cli.command("generate")

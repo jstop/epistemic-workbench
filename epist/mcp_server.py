@@ -337,6 +337,289 @@ async def get_workspace_stats(workspace: str) -> str:
     )
 
 
+# ── Manual intervention tools ─────────────────────────────────────────
+
+@mcp.tool()
+async def respond_to_defeater(workspace: str, argument_id: str, response: str, defeater_index: int = -1) -> str:
+    """Respond to a defeater on an argument, marking it as answered.
+
+    The response is recorded and the defeater status changes from active to
+    answered, which may change the ATMS status of the thesis.
+
+    Args:
+        workspace: Workspace name or path
+        argument_id: ID (or prefix) of the argument with the defeater
+        response: Your response explaining why this defeater is addressed
+        defeater_index: Which defeater to respond to (-1 = first active)
+    """
+    s = _get_store(workspace)
+    obj = s.get(argument_id)
+    if not obj or not hasattr(obj, 'defeaters'):
+        return f"Error: argument not found: {argument_id}"
+
+    if defeater_index >= 0:
+        if defeater_index >= len(obj.defeaters):
+            return f"Error: defeater index {defeater_index} out of range (0-{len(obj.defeaters)-1})"
+        d = obj.defeaters[defeater_index]
+    else:
+        d = next((d for d in obj.defeaters if d.status == DefeaterStatus.ACTIVE), None)
+        if not d:
+            return "No active defeaters on this argument."
+
+    d.status = DefeaterStatus.ANSWERED
+    d.response = response
+    s.save()
+
+    if s.is_git_repo():
+        s.git_commit(f"[manual] Respond to defeater: {d.description[:50]}")
+
+    from epist.engine import compute_atms
+    atms = compute_atms(s)
+
+    thesis = next((c for c in s.claims.values() if c.is_root), None)
+    thesis_status = atms.get(thesis.id, "unknown") if thesis else "unknown"
+
+    return (
+        f"Defeater marked as answered.\n\n"
+        f"**Defeater:** {d.description}\n"
+        f"**Response:** {response}\n\n"
+        f"Thesis ATMS status: **{thesis_status}**"
+    )
+
+
+@mcp.tool()
+async def add_evidence_to_claim(workspace: str, claim_id: str, title: str,
+                                 description: str, source: str = "",
+                                 evidence_type: str = "observation",
+                                 reliability: float = 0.7,
+                                 pattern: str = "induction") -> str:
+    """Attach new evidence to a specific claim via a supporting argument.
+
+    Creates an evidence node and an argument linking it to the claim.
+    This is how you add external sources, citations, or observations
+    to strengthen (or challenge) a specific part of the argument graph.
+
+    Args:
+        workspace: Workspace name or path
+        claim_id: ID (or prefix) of the claim to attach evidence to
+        title: Short title for the evidence
+        description: Detailed description of the evidence
+        source: Citation or source URL
+        evidence_type: observation, experiment, testimony, document, or statistical
+        reliability: How reliable is this evidence (0.0-1.0)
+        pattern: Inference pattern (induction, abduction, testimony, causal, etc.)
+    """
+    from epist.model import Evidence, Argument, Confidence, EvidenceType, InferencePattern
+
+    s = _get_store(workspace)
+    target = s.get(claim_id)
+    if not target:
+        return f"Error: claim not found: {claim_id}"
+
+    e = Evidence(
+        title=title, description=description,
+        evidence_type=EvidenceType(evidence_type),
+        source=source, reliability=reliability,
+    )
+    s.add_evidence(e)
+
+    a = Argument(
+        conclusion=target.id,
+        premises=[e.id],
+        pattern=InferencePattern(pattern),
+        label=f"Evidence: {title}",
+        confidence=Confidence(reliability),
+    )
+    s.add_argument(a)
+
+    if s.is_git_repo():
+        s.git_commit(f"[manual] Add evidence: {title}")
+
+    from epist.engine import compute_atms
+    atms = compute_atms(s)
+    target_label = f"{target.subject} {target.predicate} {target.object}" if hasattr(target, 'subject') else claim_id[:12]
+    target_status = atms.get(target.id, "unknown")
+
+    return (
+        f"Evidence added and linked to claim.\n\n"
+        f"**Evidence:** {title}\n"
+        f"**Source:** {source or '(none)'}\n"
+        f"**Reliability:** {reliability:.0%}\n"
+        f"**Linked to:** {target_label}\n"
+        f"**Claim status:** {target_status}"
+    )
+
+
+@mcp.tool()
+async def challenge_claim(workspace: str, claim_id: str, description: str,
+                           defeater_type: str = "undercutting") -> str:
+    """Add a defeater/challenge to arguments supporting a claim.
+
+    Adds an active defeater to the strongest supporting argument for this claim.
+    This may change the ATMS status of the claim and the thesis.
+
+    Args:
+        workspace: Workspace name or path
+        claim_id: ID (or prefix) of the claim to challenge
+        description: What challenges this claim
+        defeater_type: rebutting, undercutting, or undermining
+    """
+    from epist.model import Defeater, DefeaterType, DefeaterStatus
+
+    s = _get_store(workspace)
+    target = s.get(claim_id)
+    if not target:
+        return f"Error: claim not found: {claim_id}"
+
+    supporting_args = [a for a in s.arguments.values() if a.conclusion == target.id]
+    if not supporting_args:
+        return "No supporting arguments found for this claim. Cannot attach a defeater."
+
+    arg = max(supporting_args, key=lambda a: a.confidence.level)
+    arg.defeaters.append(Defeater(
+        type=DefeaterType(defeater_type),
+        description=description,
+        status=DefeaterStatus.ACTIVE,
+    ))
+    s.save()
+
+    if s.is_git_repo():
+        s.git_commit(f"[manual] Challenge: {description[:50]}")
+
+    from epist.engine import compute_atms
+    atms = compute_atms(s)
+    target_label = f"{target.subject} {target.predicate} {target.object}" if hasattr(target, 'subject') else claim_id[:12]
+    target_status = atms.get(target.id, "unknown")
+
+    return (
+        f"Challenge added.\n\n"
+        f"**Type:** {defeater_type}\n"
+        f"**Challenge:** {description}\n"
+        f"**On argument:** {arg.label or '(unlabeled)'}\n"
+        f"**Claim status:** {target_status}"
+    )
+
+
+@mcp.tool()
+async def set_confidence(workspace: str, claim_id: str, confidence: float,
+                          note: str = "") -> str:
+    """Manually set confidence on a claim.
+
+    Args:
+        workspace: Workspace name or path
+        claim_id: ID (or prefix) of the claim
+        confidence: New confidence value (0.0-1.0)
+        note: Reason for the adjustment
+    """
+    from epist.model import Confidence
+
+    s = _get_store(workspace)
+    target = s.get(claim_id)
+    if not target or not hasattr(target, 'confidence'):
+        return f"Error: claim not found: {claim_id}"
+
+    old_val = target.confidence.level
+    target.confidence = Confidence(confidence)
+    if note:
+        existing = target.notes or ""
+        target.notes = f"{existing}\n[{confidence:.0%}] {note}".strip() if existing else f"[{confidence:.0%}] {note}"
+    s.save()
+
+    label = f"{target.subject} {target.predicate} {target.object}" if hasattr(target, 'subject') else claim_id[:12]
+    if s.is_git_repo():
+        s.git_commit(f"[manual] Set confidence {old_val:.0%} -> {confidence:.0%}: {label[:40]}")
+
+    return (
+        f"Confidence updated.\n\n"
+        f"**Claim:** {label}\n"
+        f"**Was:** {old_val:.0%}\n"
+        f"**Now:** {confidence:.0%}\n"
+        + (f"**Note:** {note}" if note else "")
+    )
+
+
+@mcp.tool()
+async def show_graph(workspace: str) -> str:
+    """Show the argument graph structure for the current thesis.
+
+    Returns a tree view of claims, evidence, arguments, and defeaters
+    with ATMS status indicators.
+
+    Args:
+        workspace: Workspace name or path
+    """
+    from epist.engine import compute_atms
+
+    s = _get_store(workspace)
+    thesis = next((c for c in s.claims.values() if c.is_root), None)
+    if not thesis:
+        return "No thesis found."
+
+    atms = compute_atms(s)
+
+    def status_icon(st):
+        return {"accepted": "+", "provisional": "~", "defeated": "x", "unknown": "?"}.get(st, "?")
+
+    lines = []
+    thesis_label = thesis.notes or f"{thesis.subject} {thesis.predicate} {thesis.object}"
+    if len(thesis_label) > 100:
+        thesis_label = thesis_label[:97] + "..."
+    st = atms.get(thesis.id, "unknown")
+    lines.append(f"[{status_icon(st)}] **THESIS:** {thesis_label} ({thesis.confidence.level:.0%})")
+    lines.append(f"    ID: `{thesis.id[:16]}`")
+
+    def render_node(node_id, indent=1, visited=None):
+        if visited is None:
+            visited = set()
+        if node_id in visited:
+            return
+        visited.add(node_id)
+        prefix = "    " * indent
+
+        for arg in s.arguments.values():
+            if arg.conclusion == node_id:
+                arg_st = atms.get(arg.id, "unknown")
+                defeaters_active = [d for d in arg.defeaters if d.status == DefeaterStatus.ACTIVE]
+                defeaters_answered = [d for d in arg.defeaters if d.status == DefeaterStatus.ANSWERED]
+
+                lines.append(f"{prefix}[{status_icon(arg_st)}] **Argument:** {arg.label or '(unlabeled)'} ({arg.pattern.value}, {arg.confidence.level:.0%})")
+                lines.append(f"{prefix}    ID: `{arg.id[:16]}`")
+
+                for d in defeaters_active:
+                    lines.append(f"{prefix}    [x] DEFEATER ({d.type.value}): {d.description[:80]}")
+                for d in defeaters_answered:
+                    lines.append(f"{prefix}    [+] ~~{d.description[:60]}~~ — {d.response or '(answered)'}")
+
+                for pid in arg.premises:
+                    p = s.get(pid)
+                    if not p:
+                        continue
+                    p_st = atms.get(pid, "unknown")
+                    if hasattr(p, 'subject'):
+                        plabel = f"{p.subject} {p.predicate} {p.object}"
+                        pconf = f"{p.confidence.level:.0%}"
+                        lines.append(f"{prefix}    [{status_icon(p_st)}] Claim: {plabel} ({pconf})")
+                        lines.append(f"{prefix}        ID: `{pid[:16]}`")
+                        render_node(pid, indent + 2, visited)
+                    else:
+                        lines.append(f"{prefix}    [{status_icon(p_st)}] Evidence: {p.title} ({p.reliability:.0%}) src={p.source or '(none)'}")
+                        lines.append(f"{prefix}        ID: `{pid[:16]}`")
+
+    render_node(thesis.id)
+
+    if thesis.assumes:
+        lines.append("")
+        lines.append("**Assumptions:**")
+        for aid in thesis.assumes:
+            a = s.get(aid)
+            if a:
+                a_st = atms.get(aid, "unknown")
+                lines.append(f"    [{status_icon(a_st)}] {a.subject} {a.predicate} {a.object} ({a.confidence.level:.0%})")
+                lines.append(f"        ID: `{aid[:16]}`")
+
+    return "\n".join(lines)
+
+
 # ── Entry point ──────────────────────────────────────────────────────
 
 def main():
