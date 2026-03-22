@@ -13,6 +13,7 @@ from mcp.server.fastmcp import FastMCP
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from epist.store import Store
+from epist.model import DefeaterStatus
 from epist.llm import (
     generate_full_graph,
     compute_summary,
