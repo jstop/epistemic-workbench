@@ -336,16 +336,26 @@ def enhance_thesis(store, thesis_id: str) -> dict:
     user_message = "\n\n".join(context_parts)
 
     client = anthropic.Anthropic()
-    response = client.messages.parse(
+    response = client.messages.create(
         model="claude-opus-4-6",
         max_tokens=8000,
         system=ENHANCE_SYSTEM,
         thinking={"type": "adaptive"},
-        messages=[{"role": "user", "content": user_message}],
-        output_format=Enhancement,
+        messages=[{"role": "user", "content": (
+            user_message + "\n\nReturn a JSON object with keys: "
+            "enhanced_thesis (string), rationale (string), "
+            "changes (array of {type, description}). Return ONLY the JSON."
+        )}],
     )
 
-    result = response.parsed_output
+    # Extract text block (skip thinking blocks)
+    raw = next(b.text for b in response.content if b.type == "text")
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[1]
+        if raw.endswith("```"):
+            raw = raw[:-3]
+    result = Enhancement.model_validate_json(raw)
     return {
         "enhanced_thesis": result.enhanced_thesis,
         "rationale": result.rationale,
