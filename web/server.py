@@ -10,7 +10,6 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import anthropic
 
 # Ensure epist package is importable
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -24,6 +23,16 @@ from epist.store import Store, _serialize
 from epist.engine import (
     compute_atms, ATMSStatus, check_coherence, find_blind_spots,
     surface_assumptions, stress_test, bayesian_update, compute_calibration,
+)
+from epist.llm import (
+    generate_full_graph as _generate_full_graph_impl,
+    compute_summary as _compute_summary_impl,
+    enhance_thesis as _enhance_thesis_impl,
+    accept_enhanced_thesis as _accept_enhanced_impl,
+    get_thesis_versions as _get_thesis_versions_impl,
+    list_theses as _list_theses_impl,
+    count_subgraph as _count_subgraph,
+    GENERATE_PROMPT, ENHANCE_PROMPT,
 )
 
 app = FastAPI(title="Epistemic Workbench API")
@@ -39,15 +48,7 @@ app.add_middleware(
 WORKSPACE = Path(os.environ.get("EPIST_HOME", Path(__file__).parent.parent / "demo-workspace"))
 store: Store = Store(WORKSPACE)
 
-# Load API key from ~/.api_keys/env if not already set
-_api_keys_file = Path.home() / ".api_keys" / "env"
-if not os.environ.get("ANTHROPIC_API_KEY") and _api_keys_file.exists():
-    for line in _api_keys_file.read_text().splitlines():
-        line = line.strip()
-        if line.startswith("ANTHROPIC_API_KEY="):
-            val = line.split("=", 1)[1].strip().strip("'\"")
-            os.environ["ANTHROPIC_API_KEY"] = val
-            break
+# API key loading is handled by epist.llm.get_client()
 
 
 def reload_store():
@@ -64,6 +65,7 @@ class ClaimCreate(BaseModel):
     confidence: float = 0.7
     modality: str = "empirical"
     notes: str = ""
+    is_root: bool = False
 
 class ClaimUpdate(BaseModel):
     subject: Optional[str] = None
@@ -99,6 +101,12 @@ class DefeaterUpdate(BaseModel):
 
 class GenerateRequest(BaseModel):
     thesis: str
+
+class AcceptEnhancedRequest(BaseModel):
+    thesis_id: str
+    enhanced_thesis: str
+    rationale: str = ""
+    changes: list = []
 
 class BayesianRequest(BaseModel):
     prior: float
@@ -136,6 +144,7 @@ def create_claim(body: ClaimCreate):
         confidence=Confidence(body.confidence),
         modality=Modality(body.modality),
         notes=body.notes,
+        is_root=body.is_root,
     )
     store.add_claim(c)
     return _serialize(c)
@@ -428,439 +437,75 @@ def bayesian(body: BayesianRequest):
 
 @app.get("/api/summary/theses")
 def list_theses():
-    """Return root theses: claims that are argument conclusions but not premises of other arguments."""
-    # Find all claims used as premises
-    premise_ids = set()
-    conclusion_ids = set()
-    support_count = {}
-    for a in store.arguments.values():
-        conclusion_ids.add(a.conclusion)
-        support_count[a.conclusion] = support_count.get(a.conclusion, 0) + 1
-        for pid in a.premises:
-            premise_ids.add(pid)
+    """Return root theses grouped by lineage, showing only the latest version per lineage."""
+    return _list_theses_impl(store)
 
-    # Root theses = conclusions that are never used as premises
-    root_ids = conclusion_ids - premise_ids
-    # Fallback: if no pure roots, use all conclusions
-    if not root_ids:
-        root_ids = conclusion_ids
 
-    ranked = sorted(root_ids, key=lambda cid: support_count.get(cid, 0), reverse=True)
-    results = []
-    for cid in ranked:
-        c = store.claims.get(cid)
-        if c:
-            results.append({
-                "id": cid,
-                "label": f"{c.subject} {c.predicate} {c.object}",
-                "notes": c.notes,
-                "support_count": support_count.get(cid, 0),
-            })
-    return results
+def _compute_summary(thesis_id: Optional[str] = None):
+    """Compute summary data for a thesis. Delegates to epist.llm."""
+    return _compute_summary_impl(store, thesis_id)
 
 
 @app.get("/api/summary")
 def get_summary(thesis_id: Optional[str] = None):
-    if not store.claims:
-        return {"markdown": "No claims yet.", "thesis": None}
+    return _compute_summary(thesis_id)
 
-    atms = compute_atms(store)
 
-    # Use provided thesis_id or find root thesis
-    if thesis_id and thesis_id in store.claims:
-        thesis = store.claims[thesis_id]
-    else:
-        # Root thesis = conclusion that is never a premise, with most support
-        premise_ids = set()
-        support_count = {}
-        for a in store.arguments.values():
-            support_count[a.conclusion] = support_count.get(a.conclusion, 0) + 1
-            for pid in a.premises:
-                premise_ids.add(pid)
-        root_ids = set(support_count.keys()) - premise_ids
-        if root_ids:
-            thesis_id = max(root_ids, key=lambda cid: support_count.get(cid, 0))
-        elif support_count:
-            thesis_id = max(support_count, key=support_count.get)
-        else:
-            thesis_id = next(iter(store.claims))
-        thesis = store.claims.get(thesis_id)
-        if not thesis:
-            thesis_id = next(iter(store.claims))
-            thesis = store.claims[thesis_id]
+# ── Enhance thesis ───────────────────────────────────────────────────
 
-    # Walk the argument subgraph reachable from this thesis
-    subgraph_nodes = set()  # all node IDs in this thesis's tree
-    subgraph_args = set()   # all argument IDs in this thesis's tree
+class EnhanceRequest(BaseModel):
+    thesis_id: str
 
-    def walk(node_id):
-        if node_id in subgraph_nodes:
-            return
-        subgraph_nodes.add(node_id)
-        for aid, a in store.arguments.items():
-            if a.conclusion == node_id:
-                subgraph_args.add(aid)
-                for pid in a.premises:
-                    walk(pid)
-        # Also walk assumptions
-        c = store.claims.get(node_id)
-        if c:
-            for assumed_id in c.assumes:
-                walk(assumed_id)
 
-    walk(thesis_id)
-
-    # Gather supporting arguments for thesis (direct supporters only)
-    supporting = []
-    for aid in subgraph_args:
-        a = store.arguments[aid]
-        if a.conclusion == thesis_id:
-            premises = []
-            for pid in a.premises:
-                p = store.get(pid)
-                if p:
-                    premises.append({
-                        "type": type(p).__name__.lower(),
-                        "label": f"{p.subject} {p.predicate} {p.object}" if hasattr(p, "subject") else getattr(p, "title", pid[:12]),
-                        "confidence": p.confidence.level if hasattr(p, "confidence") else getattr(p, "reliability", None),
-                        "notes": getattr(p, "notes", "") or getattr(p, "description", ""),
-                    })
-            supporting.append({
-                "label": a.label or "(unlabeled)",
-                "pattern": a.pattern.value,
-                "confidence": a.confidence.level,
-                "premises": premises,
-                "defeaters": [
-                    {"type": d.type.value, "description": d.description,
-                     "status": d.status.value, "response": d.response}
-                    for d in a.defeaters
-                ],
-            })
-
-    # Defeaters scoped to this thesis's subgraph only
-    all_defeaters = []
-    for aid in subgraph_args:
-        a = store.arguments[aid]
-        for d in a.defeaters:
-            all_defeaters.append({
-                "type": d.type.value,
-                "description": d.description,
-                "status": d.status.value,
-                "response": d.response,
-                "argument_label": a.label or "(unlabeled)",
-            })
-
-    # Assumptions
-    assumptions = surface_assumptions(store, thesis_id)
-
-    # Issues — scoped to subgraph
-    coherence = check_coherence(store)
-    blind_spots = find_blind_spots(store)
-    # Filter to only issues mentioning nodes in our subgraph
-    coherence = [c for c in coherence if any(nid[:12] in c.get("message", "") for nid in subgraph_nodes) or c.get("severity") == "high"]
-    blind_spots = [b for b in blind_spots if any(nid[:12] in b.get("message", "") for nid in subgraph_nodes) or b.get("risk") == "high"]
-
-    # Confidence assessment scoped to subgraph
-    subgraph_arg_objs = [store.arguments[aid] for aid in subgraph_args]
-    arg_confidences = [a.confidence.level for a in subgraph_arg_objs]
-    claims_in_subgraph = [nid for nid in subgraph_nodes if nid in store.claims]
-    claims_with_support = len(set(a.conclusion for a in subgraph_arg_objs))
-    active_defeaters = sum(1 for d in all_defeaters if d["status"] == "active")
-
-    assessment = {
-        "thesis_confidence": thesis.confidence.level,
-        "average_argument_strength": sum(arg_confidences) / len(arg_confidences) if arg_confidences else 0,
-        "claims_supported": f"{claims_with_support}/{len(claims_in_subgraph)}",
-        "active_defeaters": active_defeaters,
-        "atms_status": atms.get(thesis_id, "unknown"),
-    }
-
-    # Build markdown
-    thesis_label = f"{thesis.subject} {thesis.predicate} {thesis.object}"
-    md = []
-    md.append(f"# {thesis.notes or thesis_label}")
-    md.append("")
-    md.append(f"**Thesis:** {thesis_label}")
-    md.append(f"**Confidence:** {thesis.confidence.level:.0%} | **ATMS:** {atms.get(thesis_id, 'unknown')}")
-    md.append("")
-
-    if supporting:
-        md.append("## Supporting Arguments")
-        md.append("")
-        for arg in supporting:
-            md.append(f"### {arg['label']}")
-            md.append(f"*Pattern: {arg['pattern']} | Confidence: {arg['confidence']:.0%}*")
-            md.append("")
-            for p in arg["premises"]:
-                conf_str = f" ({p['confidence']:.0%})" if p["confidence"] is not None else ""
-                md.append(f"- **{p['type'].title()}:** {p['label']}{conf_str}")
-                if p["notes"]:
-                    md.append(f"  - {p['notes']}")
-            if arg["defeaters"]:
-                md.append("")
-                for d in arg["defeaters"]:
-                    status_marker = "ACTIVE" if d["status"] == "active" else d["status"]
-                    md.append(f"- **Objection [{status_marker}]:** {d['description']}")
-                    if d["response"]:
-                        md.append(f"  - *Response:* {d['response']}")
-            md.append("")
-
-    active = [d for d in all_defeaters if d["status"] == "active"]
-    answered = [d for d in all_defeaters if d["status"] == "answered"]
-
-    if all_defeaters:
-        md.append("## Known Objections")
-        md.append("")
-        if active:
-            md.append("### Unresolved")
-            for d in active:
-                md.append(f"- [{d['type']}] {d['description']} *(on: {d['argument_label']})*")
-            md.append("")
-        if answered:
-            md.append("### Answered")
-            for d in answered:
-                md.append(f"- ~~{d['description']}~~ — {d['response'] or '(no response recorded)'}")
-            md.append("")
-
-    if assumptions:
-        md.append("## Assumptions")
-        md.append("")
-        for a in assumptions:
-            status = "supported" if a["supported"] else "**UNSUPPORTED**"
-            md.append(f"- {a['label']} [{a['type']}] — {status}")
-        md.append("")
-
-    if coherence or blind_spots:
-        md.append("## Unresolved Issues")
-        md.append("")
-        for iss in coherence:
-            md.append(f"- **{iss['severity'].upper()}** ({iss['check']}): {iss['message']}")
-        for sp in blind_spots:
-            md.append(f"- **{sp['risk'].upper()} RISK:** {sp['message']}")
-        md.append("")
-
-    if active:
-        md.append("## What Would Change My Mind")
-        md.append("")
-        for d in active:
-            md.append(f"- If {d['description'].lower()}")
-        md.append("")
-
-    md.append("## Confidence Assessment")
-    md.append("")
-    md.append(f"- **Thesis confidence:** {assessment['thesis_confidence']:.0%}")
-    md.append(f"- **Average argument strength:** {assessment['average_argument_strength']:.0%}")
-    md.append(f"- **Claims with support:** {assessment['claims_supported']}")
-    md.append(f"- **Active defeaters:** {assessment['active_defeaters']}")
-    md.append(f"- **Overall status:** {assessment['atms_status']}")
-
-    return {
-        "thesis": {
-            "label": thesis_label,
-            "notes": thesis.notes,
-            "confidence": thesis.confidence.level,
-            "atms_status": atms.get(thesis_id, "unknown"),
-        },
-        "supporting_arguments": supporting,
-        "objections": all_defeaters,
-        "assumptions": assumptions,
-        "unresolved_issues": {"coherence": coherence, "blind_spots": blind_spots},
-        "confidence_assessment": assessment,
-        "markdown": "\n".join(md),
-    }
+@app.post("/api/enhance-thesis")
+async def enhance_thesis(body: EnhanceRequest):
+    """Use Claude to suggest an enhanced version of the thesis based on its analysis."""
+    try:
+        return _enhance_thesis_impl(store, body.thesis_id)
+    except RuntimeError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"LLM call failed: {e}")
 
 
 # ── Auto-generate argument graph ─────────────────────────────────────
 
-GENERATE_PROMPT = """\
-You are an epistemic analyst. Given a thesis statement, decompose it into a structured argument graph.
-
-Return a JSON object with exactly this structure:
-{
-  "thesis": {
-    "subject": "short-hyphenated-subject",
-    "predicate": "short-hyphenated-verb",
-    "object": "short-hyphenated-object",
-    "confidence": 0.7,
-    "modality": "empirical",
-    "notes": "The full thesis statement in natural language"
-  },
-  "claims": [
-    {
-      "subject": "...",
-      "predicate": "...",
-      "object": "...",
-      "confidence": 0.5-0.95,
-      "modality": "empirical|analytic|normative",
-      "notes": "Natural language explanation of this claim"
-    }
-  ],
-  "evidence": [
-    {
-      "title": "Short title",
-      "description": "Detailed description of the evidence",
-      "evidence_type": "observation|experiment|testimony|document|statistical",
-      "source": "Citation or source if known",
-      "reliability": 0.5-0.95
-    }
-  ],
-  "arguments": [
-    {
-      "conclusion_ref": "thesis|claim_0|claim_1|...",
-      "premise_refs": ["claim_0", "evidence_0", ...],
-      "pattern": "abduction|induction|modus_ponens|analogy|causal|testimony",
-      "label": "Short description of this argument",
-      "confidence": 0.5-0.9
-    }
-  ],
-  "assumptions": [
-    {
-      "subject": "...",
-      "predicate": "...",
-      "object": "...",
-      "notes": "Why this is assumed and what it would mean if wrong"
-    }
-  ],
-  "defeaters": [
-    {
-      "argument_ref": "argument_0|argument_1|...",
-      "type": "rebutting|undercutting|undermining",
-      "description": "What challenges this argument"
-    }
-  ]
-}
-
-Rules:
-- Generate 3-5 supporting claims that decompose the thesis
-- Generate 2-4 pieces of evidence (real or plausible) supporting the claims
-- Generate arguments linking evidence and claims to the thesis
-- Surface 2-3 unstated assumptions the thesis depends on
-- Generate 1-2 defeaters (genuine challenges, not strawmen)
-- Use realistic confidence levels (not all high)
-- The "modality" field should be "empirical" for factual claims, "analytic" for logical/definitional claims, "normative" for value claims
-- Reference format: "thesis" for the thesis, "claim_0" for first claim, "evidence_0" for first evidence, "argument_0" for first argument
-- Be intellectually honest - include real weaknesses
-
-Return ONLY the JSON object, no other text.
-"""
-
-
 @app.post("/api/generate")
 async def generate_graph(body: GenerateRequest):
     """Use Claude to auto-generate an argument graph from a thesis."""
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise HTTPException(500, "ANTHROPIC_API_KEY not set")
-
-    client = anthropic.Anthropic(api_key=api_key)
-
     try:
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=4000,
-            messages=[{
-                "role": "user",
-                "content": f"{GENERATE_PROMPT}\n\nThesis: {body.thesis}",
-            }],
-        )
-        raw = response.content[0].text.strip()
-        # Strip markdown code fence if present
-        if raw.startswith("```"):
-            raw = raw.split("\n", 1)[1]
-            if raw.endswith("```"):
-                raw = raw[:-3]
-        data = json_mod.loads(raw)
-    except json_mod.JSONDecodeError as e:
-        raise HTTPException(500, f"Failed to parse LLM response: {e}")
+        thesis_id = _generate_full_graph_impl(store, body.thesis)
+    except RuntimeError as e:
+        raise HTTPException(500, str(e))
     except Exception as e:
         raise HTTPException(500, f"LLM call failed: {e}")
 
-    # Build objects from the generated structure
-    created_ids = {}  # ref_name -> actual ID
-
-    # 1. Create thesis
-    t = data["thesis"]
-    thesis = store.add_claim(Claim(
-        subject=t["subject"], predicate=t["predicate"], object=t["object"],
-        confidence=Confidence(t.get("confidence", 0.7)),
-        modality=Modality(t.get("modality", "empirical")),
-        notes=t.get("notes", body.thesis),
-    ))
-    created_ids["thesis"] = thesis.id
-
-    # 2. Create claims
-    for i, c in enumerate(data.get("claims", [])):
-        claim = store.add_claim(Claim(
-            subject=c["subject"], predicate=c["predicate"], object=c["object"],
-            confidence=Confidence(c.get("confidence", 0.7)),
-            modality=Modality(c.get("modality", "empirical")),
-            notes=c.get("notes", ""),
-        ))
-        created_ids[f"claim_{i}"] = claim.id
-
-    # 3. Create evidence
-    for i, e in enumerate(data.get("evidence", [])):
-        ev = store.add_evidence(Evidence(
-            title=e["title"], description=e["description"],
-            evidence_type=EvidenceType(e.get("evidence_type", "observation")),
-            source=e.get("source", ""),
-            reliability=e.get("reliability", 0.7),
-        ))
-        created_ids[f"evidence_{i}"] = ev.id
-
-    # 4. Create arguments
-    for i, a in enumerate(data.get("arguments", [])):
-        conc_ref = a.get("conclusion_ref", "thesis")
-        conc_id = created_ids.get(conc_ref)
-        if not conc_id:
-            continue
-        premise_ids = [created_ids[ref] for ref in a.get("premise_refs", []) if ref in created_ids]
-        if not premise_ids:
-            continue
-        arg = store.add_argument(Argument(
-            conclusion=conc_id, premises=premise_ids,
-            pattern=InferencePattern(a.get("pattern", "abduction")),
-            label=a.get("label", ""),
-            confidence=Confidence(a.get("confidence", 0.7)),
-        ))
-        created_ids[f"argument_{i}"] = arg.id
-
-    # 5. Create assumptions as claims linked via assumes
-    assumption_ids = []
-    for a in data.get("assumptions", []):
-        ac = store.add_claim(Claim(
-            subject=a.get("subject", "assumption"),
-            predicate=a.get("predicate", "is-assumed"),
-            object=a.get("object", "true"),
-            confidence=Confidence(0.5),
-            modality=Modality("empirical"),
-            notes=a.get("notes", ""),
-        ))
-        assumption_ids.append(ac.id)
-    if assumption_ids:
-        thesis.assumes = assumption_ids
-        store.save()
-
-    # 6. Add defeaters
-    for d in data.get("defeaters", []):
-        arg_ref = d.get("argument_ref", "argument_0")
-        arg_id = created_ids.get(arg_ref)
-        if arg_id and arg_id in store.arguments:
-            store.arguments[arg_id].defeaters.append(Defeater(
-                type=DefeaterType(d.get("type", "undercutting")),
-                description=d["description"],
-                status=DefeaterStatus.ACTIVE,
-            ))
-    store.save()
-
     return {
         "ok": True,
-        "created": {
-            "claims": sum(1 for k in created_ids if k.startswith("claim_")) + 1,
-            "evidence": sum(1 for k in created_ids if k.startswith("evidence_")),
-            "arguments": sum(1 for k in created_ids if k.startswith("argument_")),
-            "assumptions": len(assumption_ids),
-            "defeaters": len(data.get("defeaters", [])),
-        },
-        "thesis_id": thesis.id,
+        "created": _count_subgraph(store, thesis_id),
+        "thesis_id": thesis_id,
     }
+
+
+@app.post("/api/accept-enhanced-thesis")
+async def accept_enhanced_thesis(body: AcceptEnhancedRequest):
+    """Accept an enhanced thesis: generate a new argument graph and link it to the previous version."""
+    try:
+        result = _accept_enhanced_impl(
+            store, body.thesis_id, body.enhanced_thesis,
+            body.rationale, body.changes,
+        )
+    except RuntimeError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"LLM call failed: {e}")
+    return {"ok": True, **result}
+
+
+@app.get("/api/thesis-versions/{thesis_id}")
+def get_thesis_versions(thesis_id: str):
+    """Walk backward via previous_version to find lineage root, then build ordered chain."""
+    try:
+        return _get_thesis_versions_impl(store, thesis_id)
+    except RuntimeError as e:
+        raise HTTPException(404, str(e))

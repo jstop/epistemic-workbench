@@ -145,6 +145,9 @@ class Claim:
     scope: Scope = field(default_factory=Scope)
     identity: Identity = field(default_factory=Identity)
     assumes: list = field(default_factory=list)  # list of claim IDs
+    is_root: bool = False
+    previous_version: Optional[str] = None   # claim ID of predecessor thesis
+    version_meta: Optional[dict] = None      # {"rationale": str, "changes": list}
     notes: str = ""
     created_at: float = field(default_factory=time.time)
     id: str = ""

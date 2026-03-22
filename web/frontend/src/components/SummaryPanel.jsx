@@ -1,12 +1,16 @@
 import { useState, useEffect } from "react";
 import * as api from "../api.js";
 
-export default function SummaryPanel() {
+export default function SummaryPanel({ onThesisChange, activeThesisId }) {
   const [summary, setSummary] = useState(null);
   const [theses, setTheses] = useState([]);
   const [selectedThesis, setSelectedThesis] = useState(null);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
+  const [enhanced, setEnhanced] = useState(null);
+  const [enhancing, setEnhancing] = useState(false);
+  const [enhanceError, setEnhanceError] = useState(null);
+  const [accepting, setAccepting] = useState(false);
 
   const fetchTheses = () => {
     api.getTheses().then(setTheses).catch(() => setTheses([]));
@@ -22,9 +26,22 @@ export default function SummaryPanel() {
 
   useEffect(() => { fetchTheses(); fetch(); }, []);
 
+  // Re-fetch when parent's activeThesisId changes (e.g. version navigation in header)
+  useEffect(() => {
+    if (activeThesisId && activeThesisId !== selectedThesis) {
+      setSelectedThesis(activeThesisId);
+      setEnhanced(null);
+      setEnhanceError(null);
+      fetch(activeThesisId);
+    }
+  }, [activeThesisId]);
+
   const handleSelectThesis = (id) => {
     setSelectedThesis(id);
+    setEnhanced(null);
+    setEnhanceError(null);
     fetch(id);
+    if (onThesisChange) onThesisChange(id);
   };
 
   const handleCopy = async () => {
@@ -45,6 +62,46 @@ export default function SummaryPanel() {
     URL.revokeObjectURL(url);
   };
 
+  const handleEnhance = async () => {
+    const thesisId = summary?.thesis?.id;
+    if (!thesisId || enhancing) return;
+    setEnhancing(true);
+    setEnhanceError(null);
+    try {
+      const result = await api.enhanceThesis(thesisId);
+      setEnhanced(result);
+    } catch (err) {
+      console.error("Enhance error:", err);
+      setEnhanceError(err.message || "Enhancement failed");
+    } finally {
+      setEnhancing(false);
+    }
+  };
+
+  const handleAcceptEnhanced = async () => {
+    const thesisId = summary?.thesis?.id;
+    if (!thesisId || !enhanced?.enhanced_thesis || accepting) return;
+    setAccepting(true);
+    try {
+      const result = await api.acceptEnhancedThesis({
+        thesis_id: thesisId,
+        enhanced_thesis: enhanced.enhanced_thesis,
+        rationale: enhanced.rationale || "",
+        changes: enhanced.changes || [],
+      });
+      setEnhanced(null);
+      setSelectedThesis(result.new_thesis_id);
+      fetchTheses();
+      fetch(result.new_thesis_id);
+      if (onThesisChange) onThesisChange(result.new_thesis_id);
+    } catch (err) {
+      console.error("Accept error:", err);
+      setEnhanceError(err.message || "Failed to accept enhanced thesis");
+    } finally {
+      setAccepting(false);
+    }
+  };
+
   if (loading) {
     return <div style={{ color: "#444", fontSize: "11px", textAlign: "center", marginTop: "40px" }}>Loading…</div>;
   }
@@ -61,6 +118,11 @@ export default function SummaryPanel() {
   const coherenceIssues = summary.unresolved_issues?.coherence || [];
   const blindSpots = summary.unresolved_issues?.blind_spots || [];
   const assumptions = summary.assumptions || [];
+
+  const changeTypeColors = {
+    scope: "#60a5fa", precision: "#a78bfa", qualifier: "#fbbf24",
+    strength: "#4ade80", acknowledgment: "#f97316",
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
@@ -83,7 +145,7 @@ export default function SummaryPanel() {
             <option value="">Auto (most supported)</option>
             {theses.map((t) => (
               <option key={t.id} value={t.id}>
-                {(t.notes || t.label).slice(0, 60)}
+                {(t.notes || t.label).slice(0, 50)}{t.version_count > 1 ? ` (v${t.version_count})` : ""}
               </option>
             ))}
           </select>
@@ -108,6 +170,15 @@ export default function SummaryPanel() {
         }}>
           DOWNLOAD
         </button>
+        <button onClick={handleEnhance} disabled={enhancing} style={{
+          flex: 1, background: enhancing ? "#1a1a2e" : "#141414",
+          border: "1px solid #a78bfa44", borderRadius: "3px",
+          color: enhancing ? "#a78bfa88" : "#a78bfa", padding: "6px", fontSize: "9px",
+          cursor: enhancing ? "default" : "pointer", fontFamily: "'JetBrains Mono', monospace",
+          letterSpacing: "1px", textTransform: "uppercase",
+        }}>
+          {enhancing ? "..." : "ENHANCE"}
+        </button>
         <button onClick={() => { fetchTheses(); fetch(); }} style={{
           background: "#141414", border: "1px solid #222", borderRadius: "3px",
           color: "#666", padding: "6px 10px", fontSize: "9px",
@@ -116,6 +187,22 @@ export default function SummaryPanel() {
           ↻
         </button>
       </div>
+
+      {enhancing && (
+        <div style={{ fontSize: "9px", color: "#a78bfa88", textAlign: "center" }}>
+          Analyzing thesis for improvements...
+        </div>
+      )}
+      {accepting && (
+        <div style={{ fontSize: "9px", color: "#a78bfa", textAlign: "center", letterSpacing: "1px" }}>
+          GENERATING NEW VERSION...
+        </div>
+      )}
+      {enhanceError && (
+        <div style={{ fontSize: "9px", color: "#f87171", textAlign: "center" }}>
+          {enhanceError}
+        </div>
+      )}
 
       {/* Thesis */}
       <div style={{ background: "#141414", borderRadius: "4px", padding: "12px", borderLeft: "3px solid #FF6B35" }}>
@@ -130,6 +217,55 @@ export default function SummaryPanel() {
           <span style={{ color: atmsColor }}>{thesis.atms_status}</span>
         </div>
       </div>
+
+      {/* Enhanced Thesis Suggestion */}
+      {enhanced && (
+        <div style={{ background: "#141418", borderRadius: "4px", padding: "12px", borderLeft: "3px solid #a78bfa" }}>
+          <div style={{ fontSize: "9px", color: "#a78bfa", letterSpacing: "1px", textTransform: "uppercase", marginBottom: "6px" }}>
+            Enhanced Thesis Suggestion
+          </div>
+          <div style={{ fontSize: "12px", color: "#e0e0e0", lineHeight: "1.5", marginBottom: "10px" }}>
+            {enhanced.enhanced_thesis}
+          </div>
+          {enhanced.rationale && (
+            <div style={{ fontSize: "10px", color: "#888", lineHeight: "1.5", marginBottom: "10px", paddingLeft: "8px", borderLeft: "2px solid #333" }}>
+              {enhanced.rationale}
+            </div>
+          )}
+          {enhanced.changes && enhanced.changes.length > 0 && (
+            <div style={{ marginBottom: "10px" }}>
+              <div style={{ fontSize: "9px", color: "#555", letterSpacing: "1px", textTransform: "uppercase", marginBottom: "4px" }}>
+                Changes
+              </div>
+              {enhanced.changes.map((c, i) => (
+                <div key={i} style={{ fontSize: "10px", color: "#888", marginBottom: "3px", display: "flex", gap: "6px" }}>
+                  <span style={{ color: changeTypeColors[c.type] || "#888", fontSize: "9px", textTransform: "uppercase", flexShrink: 0 }}>
+                    {c.type}
+                  </span>
+                  <span>{c.description}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ display: "flex", gap: "6px" }}>
+            <button onClick={handleAcceptEnhanced} disabled={accepting} style={{
+              flex: 1, background: accepting ? "#a78bfa88" : "#a78bfa", border: "none", borderRadius: "3px",
+              color: "#0A0A0A", padding: "8px", fontSize: "10px",
+              cursor: accepting ? "default" : "pointer", fontFamily: "'JetBrains Mono', monospace",
+              fontWeight: 600, letterSpacing: "1px",
+            }}>
+              {accepting ? "GENERATING..." : "ACCEPT & GENERATE NEW GRAPH"}
+            </button>
+            <button onClick={() => setEnhanced(null)} style={{
+              background: "transparent", border: "1px solid #333", borderRadius: "3px",
+              color: "#555", padding: "8px 16px", fontSize: "10px",
+              cursor: "pointer", fontFamily: "'JetBrains Mono', monospace",
+            }}>
+              DISMISS
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Supporting Arguments */}
       {summary.supporting_arguments.length > 0 && (

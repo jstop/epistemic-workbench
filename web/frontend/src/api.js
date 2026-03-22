@@ -53,3 +53,12 @@ export const getSummary = (thesisId) => request(`/summary${thesisId ? `?thesis_i
 
 // Auto-generate
 export const generate = (thesis) => request("/generate", { method: "POST", body: JSON.stringify({ thesis }) });
+
+// Enhance thesis
+export const enhanceThesis = (thesisId) => request("/enhance-thesis", { method: "POST", body: JSON.stringify({ thesis_id: thesisId }) });
+
+// Accept enhanced thesis (creates new version with fresh graph)
+export const acceptEnhancedThesis = (data) => request("/accept-enhanced-thesis", { method: "POST", body: JSON.stringify(data) });
+
+// Thesis version history
+export const getThesisVersions = (id) => request(`/thesis-versions/${id}`);

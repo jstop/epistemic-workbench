@@ -106,7 +106,7 @@ export default function GuidedFlow({ onAdded, onComplete }) {
         const spo = decompose(text);
         const c = await api.createClaim({
           subject: spo.subject, predicate: spo.predicate, object: spo.object,
-          confidence: 0.7, modality: "empirical", notes: text,
+          confidence: 0.7, modality: "empirical", notes: text, is_root: true,
         });
         setThesisId(c.id);
       } else if (step === 1) {

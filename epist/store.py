@@ -1,9 +1,11 @@
 """
 Simple JSON-file store for epistemic objects.
 All objects stored in a single workspace directory.
+Each workspace can optionally be a git repo for version tracking.
 """
 import json
 import os
+import subprocess
 from pathlib import Path
 from dataclasses import asdict
 from .model import (
@@ -40,6 +42,9 @@ def _deserialize_claim(d):
         scope=Scope(**d.get("scope", {})) if isinstance(d.get("scope"), dict) else Scope(),
         identity=Identity(**d.get("identity", {})) if isinstance(d.get("identity"), dict) else Identity(),
         assumes=d.get("assumes", []),
+        is_root=d.get("is_root", False),
+        previous_version=d.get("previous_version", None),
+        version_meta=d.get("version_meta", None),
         notes=d.get("notes", ""),
         created_at=d.get("created_at", 0),
         id=d["id"],
@@ -201,6 +206,77 @@ class Store:
         all_objs.update(self.predictions)
         return all_objs
 
+    def clear(self):
+        """Wipe all collections (but keep the workspace directory)."""
+        self.claims.clear()
+        self.evidence.clear()
+        self.arguments.clear()
+        self.evaluations.clear()
+        self.predictions.clear()
+        self.foundations.clear()
+        self.save()
+
     def init_workspace(self):
         self.home.mkdir(parents=True, exist_ok=True)
         self.save()
+
+    # ── Git operations ───────────────────────────────────────────────
+
+    def _git(self, *args, check=True):
+        """Run a git command in the workspace directory."""
+        result = subprocess.run(
+            ["git"] + list(args),
+            cwd=self.home,
+            capture_output=True,
+            text=True,
+        )
+        if check and result.returncode != 0:
+            raise RuntimeError(f"git {args[0]} failed: {result.stderr.strip()}")
+        return result
+
+    def is_git_repo(self) -> bool:
+        return (self.home / ".git").is_dir()
+
+    def git_init(self):
+        """Initialize workspace as a git repo."""
+        self.home.mkdir(parents=True, exist_ok=True)
+        self._git("init")
+        gitignore = self.home / ".gitignore"
+        if not gitignore.exists():
+            gitignore.write_text("__pycache__/\n*.pyc\n.DS_Store\n")
+        self._git("add", "-A")
+        self._git("commit", "-m", "[init] epistemic workspace", "--allow-empty", check=False)
+
+    def git_commit(self, message: str):
+        """Stage all changes and commit. No-op if nothing changed."""
+        self._git("add", "-A")
+        # Check if there's anything to commit
+        result = self._git("diff", "--cached", "--quiet", check=False)
+        if result.returncode == 0:
+            return  # nothing staged
+        self._git("commit", "-m", message)
+
+    def git_log(self, max_count: int = 50) -> list[dict]:
+        """Return commit history as list of {hash, subject, body, date}."""
+        if not self.is_git_repo():
+            return []
+        sep = "---COMMIT---"
+        fmt = f"%H%n%s%n%b%n%aI%n{sep}"
+        result = self._git("log", f"--max-count={max_count}", f"--format={fmt}", check=False)
+        if result.returncode != 0:
+            return []
+        commits = []
+        for block in result.stdout.strip().split(sep):
+            block = block.strip()
+            if not block:
+                continue
+            lines = block.split("\n")
+            if len(lines) < 4:
+                continue
+            commits.append({
+                "hash": lines[0],
+                "subject": lines[1],
+                "body": "\n".join(lines[2:-1]).strip(),
+                "date": lines[-1],
+            })
+        return commits

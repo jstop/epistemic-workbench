@@ -5,6 +5,8 @@ __pycache__/
 .DS_Store
 demo-workspace/
 my-workspace/
+workspaces/
+coordination-thesis/
 /tmp/
 *.log
 .vite/

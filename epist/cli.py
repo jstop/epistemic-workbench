@@ -4,6 +4,8 @@ epist — Epistemic Workbench CLI
 import json
 import os
 import sys
+import time
+from datetime import datetime
 from pathlib import Path
 
 import click
@@ -11,6 +13,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich.tree import Tree
+from rich.markdown import Markdown
 from rich import box
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -457,6 +460,325 @@ def export_cmd(ctx, fmt, output):
     }
     Path(output).write_text(json.dumps(data, indent=2, default=str))
     console.print(f"[green]✓[/green] Exported {len(s.all_objects())} objects to {output}")
+
+
+# ── LLM-powered commands ─────────────────────────────────────────────
+
+@cli.command("generate")
+@click.argument("thesis", required=False)
+@click.option("--workspace", "-w", default=None, help="Create workspace at this path")
+@click.pass_context
+def generate(ctx, thesis, workspace):
+    """Generate a full argument graph from a thesis statement.
+
+    Creates a git-versioned workspace. Each generate/enhance cycle is a commit.
+    """
+    from epist.llm import generate_full_graph, count_subgraph, compute_summary
+
+    if not thesis:
+        if not sys.stdin.isatty():
+            thesis = sys.stdin.read().strip()
+        else:
+            thesis = click.prompt("Enter thesis")
+    if not thesis:
+        console.print("[red]No thesis provided.[/red]")
+        return
+
+    # --workspace overrides --home / EPIST_HOME
+    if workspace:
+        ctx.obj["home"] = workspace
+
+    s = get_store(ctx.obj["home"])
+
+    # Clear any existing data (one thesis per workspace)
+    s.clear()
+
+    # Ensure git repo
+    if not s.is_git_repo():
+        s.git_init()
+
+    with console.status("[bold cyan]Generating argument graph...[/bold cyan]"):
+        try:
+            thesis_id = generate_full_graph(s, thesis)
+        except Exception as e:
+            console.print(f"[red]Error:[/red] {e}")
+            return
+
+    # Write summary.md
+    try:
+        result = compute_summary(s, thesis_id)
+        (s.home / "summary.md").write_text(result["markdown"])
+    except Exception:
+        pass  # non-fatal
+
+    counts = count_subgraph(s, thesis_id)
+
+    # Git commit
+    short_thesis = thesis[:72] + ("..." if len(thesis) > 72 else "")
+    s.git_commit(
+        f"[generate] {short_thesis}\n\n"
+        f"Thesis: {thesis}\n"
+        f"Objects: {counts['claims']} claims, {counts['evidence']} evidence, "
+        f"{counts['arguments']} arguments, {counts['assumptions']} assumptions, "
+        f"{counts['defeaters']} defeaters"
+    )
+
+    console.print(f"\n[green]✓[/green] Generated argument graph")
+    console.print(f"  {thesis[:80]}")
+    console.print(
+        f"\n  Created: {counts['claims']} claims, {counts['evidence']} evidence, "
+        f"{counts['arguments']} arguments, {counts['assumptions']} assumptions, "
+        f"{counts['defeaters']} defeaters"
+    )
+    console.print(f"  [dim]Workspace: {s.home}[/dim]\n")
+
+
+@cli.command("summary")
+@click.argument("thesis_id", required=False)
+@click.pass_context
+def summary(ctx, thesis_id):
+    """Show thesis summary and save as summary.md."""
+    from epist.llm import compute_summary
+
+    s = get_store(ctx.obj["home"])
+    if not s.claims:
+        console.print("[dim]No claims yet. Use 'generate' to create an argument graph.[/dim]")
+        return
+
+    try:
+        result = compute_summary(s, thesis_id)
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        return
+
+    if not result.get("thesis"):
+        console.print("[dim]No thesis found.[/dim]")
+        return
+
+    # Write summary.md
+    md_text = result["markdown"]
+    (s.home / "summary.md").write_text(md_text)
+
+    # Commit if in a git repo and content changed
+    if s.is_git_repo():
+        thesis_label = result["thesis"]["notes"] or result["thesis"]["label"]
+        short_label = thesis_label[:72] + ("..." if len(thesis_label) > 72 else "")
+        assessment = result.get("confidence_assessment", {})
+        s.git_commit(
+            f"[analysis] {short_label}\n\n"
+            f"Confidence: {assessment.get('thesis_confidence', 0):.0%}\n"
+            f"Active defeaters: {assessment.get('active_defeaters', 0)}\n"
+            f"ATMS: {assessment.get('atms_status', 'unknown')}"
+        )
+
+    console.print()
+    console.print(Markdown(md_text))
+
+
+@cli.command("enhance")
+@click.argument("thesis_id", required=False)
+@click.option("--yes", "-y", is_flag=True, help="Auto-accept enhancement")
+@click.pass_context
+def enhance(ctx, thesis_id, yes):
+    """Suggest an enhanced thesis, then regenerate the argument graph."""
+    from epist.llm import (
+        compute_summary, enhance_thesis, generate_full_graph, count_subgraph,
+    )
+
+    s = get_store(ctx.obj["home"])
+    if not s.claims:
+        console.print("[dim]No claims yet. Use 'generate' to create an argument graph.[/dim]")
+        return
+
+    # Resolve thesis
+    summary_data = compute_summary(s, thesis_id)
+    if not summary_data.get("thesis"):
+        console.print("[dim]No thesis found.[/dim]")
+        return
+
+    thesis_info = summary_data["thesis"]
+    resolved_id = thesis_info["id"]
+    console.print(f"\n[bold]Current thesis:[/bold] {thesis_info['notes'] or thesis_info['label']}")
+    console.print(f"[dim]Confidence: {thesis_info['confidence']:.0%}[/dim]\n")
+
+    with console.status("[bold cyan]Analyzing and enhancing thesis...[/bold cyan]"):
+        try:
+            result = enhance_thesis(s, resolved_id)
+        except Exception as e:
+            console.print(f"[red]Error:[/red] {e}")
+            return
+
+    console.print(Panel(
+        f"[bold green]Enhanced thesis:[/bold green]\n{result['enhanced_thesis']}\n\n"
+        f"[bold]Rationale:[/bold] {result['rationale']}",
+        title="Suggested Enhancement",
+    ))
+
+    if result.get("changes"):
+        console.print("\n[bold]Changes:[/bold]")
+        for ch in result["changes"]:
+            tag = ch.get("type", "change")
+            console.print(f"  [{tag}] {ch['description']}")
+
+    console.print()
+    if not yes and not click.confirm("Accept and generate new graph?", default=False):
+        console.print("[dim]Enhancement not applied.[/dim]")
+        return
+
+    # Clear and regenerate — git preserves the old state
+    enhanced_text = result["enhanced_thesis"]
+    rationale = result.get("rationale", "")
+    changes = result.get("changes", [])
+
+    s.clear()
+
+    with console.status("[bold cyan]Generating new argument graph...[/bold cyan]"):
+        try:
+            new_thesis_id = generate_full_graph(s, enhanced_text)
+        except Exception as e:
+            console.print(f"[red]Error:[/red] {e}")
+            return
+
+    # Write summary.md
+    try:
+        new_summary = compute_summary(s, new_thesis_id)
+        (s.home / "summary.md").write_text(new_summary["markdown"])
+    except Exception:
+        pass
+
+    counts = count_subgraph(s, new_thesis_id)
+
+    # Build commit message
+    change_lines = ""
+    for ch in changes:
+        tag = ch.get("type", "change") if isinstance(ch, dict) else "change"
+        desc = ch.get("description", str(ch)) if isinstance(ch, dict) else str(ch)
+        change_lines += f"\n- [{tag}] {desc}"
+
+    short_rationale = rationale[:72] + ("..." if len(rationale) > 72 else "")
+    s.git_commit(
+        f"[enhance] {short_rationale}\n\n"
+        f"Thesis: {enhanced_text}\n\n"
+        f"Rationale: {rationale}\n"
+        f"Changes:{change_lines}\n\n"
+        f"Objects: {counts['claims']} claims, {counts['evidence']} evidence, "
+        f"{counts['arguments']} arguments"
+    )
+
+    console.print(f"\n[green]✓[/green] Enhanced thesis — new graph generated")
+    console.print(f"  {enhanced_text[:80]}")
+    console.print(
+        f"\n  Created: {counts['claims']} claims, {counts['evidence']} evidence, "
+        f"{counts['arguments']} arguments\n"
+    )
+
+
+@cli.command("versions")
+@click.pass_context
+def versions(ctx):
+    """Show version history from git log."""
+    s = get_store(ctx.obj["home"])
+
+    if not s.is_git_repo():
+        console.print("[dim]Not a git-backed workspace. Use 'generate --workspace' to create one.[/dim]")
+        return
+
+    commits = s.git_log()
+    if not commits:
+        console.print("[dim]No history yet.[/dim]")
+        return
+
+    # Filter to generate/enhance commits (skip analysis and init)
+    version_commits = [c for c in commits if c["subject"].startswith(("[generate]", "[enhance]"))]
+    version_commits.reverse()  # oldest first
+
+    if not version_commits:
+        console.print("[dim]No thesis versions found in history.[/dim]")
+        return
+
+    console.print(f"\n[bold]Version history ({len(version_commits)} versions):[/bold]\n")
+    for i, c in enumerate(version_commits):
+        version_num = i + 1
+        tag = "generate" if "[generate]" in c["subject"] else "enhance"
+        subject = c["subject"].replace("[generate] ", "").replace("[enhance] ", "")
+        is_current = (i == len(version_commits) - 1)
+        marker = " [bold yellow]<-- current[/bold yellow]" if is_current else ""
+
+        console.print(f"  [bold]v{version_num}[/bold] [dim]{c['hash'][:8]}[/dim] [{c['date'][:10]}]{marker}")
+        console.print(f"    [dim][{tag}][/dim] {subject}")
+        if c["body"]:
+            # Show thesis line from body
+            for line in c["body"].split("\n"):
+                if line.startswith("Thesis: "):
+                    thesis_text = line[8:]
+                    if len(thesis_text) > 100:
+                        thesis_text = thesis_text[:97] + "..."
+                    console.print(f"    {thesis_text}")
+                    break
+                elif line.startswith("Rationale: "):
+                    console.print(f"    [italic]{line[11:]}[/italic]")
+        console.print()
+
+
+@cli.command("diff")
+@click.argument("revision", default="HEAD~1")
+@click.pass_context
+def diff_cmd(ctx, revision):
+    """Show what changed between versions (wraps git diff)."""
+    s = get_store(ctx.obj["home"])
+    if not s.is_git_repo():
+        console.print("[dim]Not a git-backed workspace.[/dim]")
+        return
+
+    result = s._git("diff", "--stat", revision, check=False)
+    if result.returncode != 0:
+        console.print(f"[red]Error:[/red] {result.stderr.strip()}")
+        return
+    if not result.stdout.strip():
+        console.print("[dim]No changes.[/dim]")
+        return
+    console.print(result.stdout)
+
+    # Also show claim-level diff for summary.md if it exists
+    detail = s._git("diff", revision, "--", "summary.md", check=False)
+    if detail.stdout.strip():
+        console.print(Panel(detail.stdout.strip()[:2000], title="summary.md changes"))
+
+
+@cli.command("theses")
+@click.pass_context
+def theses(ctx):
+    """List all thesis lineages (legacy multi-thesis workspaces)."""
+    from epist.llm import list_theses
+
+    s = get_store(ctx.obj["home"])
+    if not s.claims:
+        console.print("[dim]No claims yet. Use 'generate' to create an argument graph.[/dim]")
+        return
+
+    results = list_theses(s)
+    if not results:
+        console.print("[dim]No theses found.[/dim]")
+        return
+
+    table = Table(box=box.SIMPLE)
+    table.add_column("ID", style="cyan", width=14)
+    table.add_column("Thesis")
+    table.add_column("Versions", justify="right")
+    table.add_column("Support", justify="right")
+
+    for r in results:
+        label = r["notes"] or r["label"]
+        if len(label) > 60:
+            label = label[:57] + "..."
+        table.add_row(
+            short_id(r["id"]),
+            label,
+            str(r["version_count"]),
+            str(r["support_count"]),
+        )
+
+    console.print(table)
 
 
 def main():
