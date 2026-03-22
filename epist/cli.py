@@ -473,7 +473,7 @@ def generate(ctx, thesis, workspace):
 
     Creates a git-versioned workspace. Each generate/enhance cycle is a commit.
     """
-    from epist.llm import generate_full_graph, count_subgraph, compute_summary
+    from epist.agent import generate_full_graph, count_subgraph, compute_summary
 
     if not thesis:
         if not sys.stdin.isatty():
@@ -538,7 +538,7 @@ def generate(ctx, thesis, workspace):
 @click.pass_context
 def summary(ctx, thesis_id):
     """Show thesis summary and save as summary.md."""
-    from epist.llm import compute_summary
+    from epist.agent import compute_summary
 
     s = get_store(ctx.obj["home"])
     if not s.claims:
@@ -581,7 +581,7 @@ def summary(ctx, thesis_id):
 @click.pass_context
 def enhance(ctx, thesis_id, yes):
     """Suggest an enhanced thesis, then regenerate the argument graph."""
-    from epist.llm import (
+    from epist.agent import (
         compute_summary, enhance_thesis, generate_full_graph, count_subgraph,
     )
 
@@ -749,7 +749,7 @@ def diff_cmd(ctx, revision):
 @click.pass_context
 def theses(ctx):
     """List all thesis lineages (legacy multi-thesis workspaces)."""
-    from epist.llm import list_theses
+    from epist.agent import list_theses
 
     s = get_store(ctx.obj["home"])
     if not s.claims:
