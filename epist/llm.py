@@ -137,7 +137,7 @@ def get_client():
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise RuntimeError("ANTHROPIC_API_KEY not set. Set it in env or ~/.api_keys/env")
-    return anthropic.Anthropic(api_key=api_key)
+    return anthropic.Anthropic(api_key=api_key, max_retries=5)
 
 
 def _parse_llm_json(raw: str) -> dict:
