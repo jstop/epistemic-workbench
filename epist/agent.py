@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Optional
 
 import anyio
-import anthropic
 from pydantic import BaseModel
 
 from claude_agent_sdk import (
@@ -255,6 +254,10 @@ def generate_full_graph(store, thesis_text: str, on_tool_call=None) -> str:
     return anyio.run(_generate_full_graph_async, store, thesis_text, on_tool_call)
 
 
+# Async version for callers already in an event loop (MCP server)
+generate_full_graph_async = _generate_full_graph_async
+
+
 # ── Enhance (raw API with structured output) ─────────────────────────
 
 class Change(BaseModel):
@@ -282,11 +285,11 @@ Your enhancement should:
 """
 
 
-def enhance_thesis(store, thesis_id: str) -> dict:
-    """Suggest an enhanced version using structured output.
+async def _enhance_thesis_async(store, thesis_id: str) -> dict:
+    """Suggest an enhanced version via Agent SDK query.
     Returns {enhanced_thesis, rationale, changes}.
     """
-    _ensure_api_key()
+    from claude_agent_sdk import query, ClaudeAgentOptions, ResultMessage
 
     summary = compute_summary(store, thesis_id)
     if not summary or not summary.get("thesis"):
@@ -334,23 +337,26 @@ def enhance_thesis(store, thesis_id: str) -> dict:
     )
 
     user_message = "\n\n".join(context_parts)
-
-    client = anthropic.Anthropic()
-    response = client.messages.create(
-        model="claude-opus-4-6",
-        max_tokens=8000,
-        system=ENHANCE_SYSTEM,
-        thinking={"type": "adaptive"},
-        messages=[{"role": "user", "content": (
-            user_message + "\n\nReturn a JSON object with keys: "
-            "enhanced_thesis (string), rationale (string), "
-            "changes (array of {type, description}). Return ONLY the JSON."
-        )}],
+    prompt = (
+        user_message + "\n\nReturn a JSON object with keys: "
+        "enhanced_thesis (string), rationale (string), "
+        "changes (array of {type, description}). Return ONLY the JSON."
     )
 
-    # Extract text block (skip thinking blocks)
-    raw = next(b.text for b in response.content if b.type == "text")
-    raw = raw.strip()
+    result_text = ""
+    async for message in query(
+        prompt=prompt,
+        options=ClaudeAgentOptions(
+            system_prompt=ENHANCE_SYSTEM,
+            model="claude-opus-4-6",
+            allowed_tools=[],
+            max_turns=1,
+        ),
+    ):
+        if isinstance(message, ResultMessage):
+            result_text = message.result
+
+    raw = result_text.strip()
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[1]
         if raw.endswith("```"):
@@ -361,3 +367,12 @@ def enhance_thesis(store, thesis_id: str) -> dict:
         "rationale": result.rationale,
         "changes": [c.model_dump() for c in result.changes],
     }
+
+
+def enhance_thesis(store, thesis_id: str) -> dict:
+    """Sync wrapper for enhance."""
+    return anyio.run(_enhance_thesis_async, store, thesis_id)
+
+
+# Async version for MCP server
+enhance_thesis_async = _enhance_thesis_async

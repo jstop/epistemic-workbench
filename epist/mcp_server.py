@@ -14,10 +14,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from epist.store import Store
 from epist.model import DefeaterStatus
-from epist.llm import (
-    generate_full_graph,
+from epist.agent import (
+    generate_full_graph_async,
+    enhance_thesis_async,
     compute_summary,
-    enhance_thesis,
     count_subgraph,
     list_theses,
     get_thesis_versions,
@@ -99,7 +99,7 @@ async def generate_thesis(thesis: str, workspace: str) -> str:
     if not s.is_git_repo():
         s.git_init()
 
-    thesis_id = generate_full_graph(s, thesis)
+    thesis_id = await generate_full_graph_async(s, thesis)
 
     # Write summary
     result = compute_summary(s, thesis_id)
@@ -181,7 +181,7 @@ async def enhance_and_accept(workspace: str) -> str:
     resolved_id = thesis_info["id"]
 
     # Get enhancement suggestion
-    result = enhance_thesis(s, resolved_id)
+    result = await enhance_thesis_async(s, resolved_id)
 
     enhanced_text = result["enhanced_thesis"]
     rationale = result.get("rationale", "")
@@ -189,7 +189,7 @@ async def enhance_and_accept(workspace: str) -> str:
 
     # Clear and regenerate
     s.clear()
-    new_thesis_id = generate_full_graph(s, enhanced_text)
+    new_thesis_id = await generate_full_graph_async(s, enhanced_text)
 
     # Write summary
     new_summary = compute_summary(s, new_thesis_id)
@@ -250,7 +250,7 @@ async def suggest_enhancement(workspace: str) -> str:
         return "No thesis found."
 
     thesis_info = summary_data["thesis"]
-    result = enhance_thesis(s, thesis_info["id"])
+    result = await enhance_thesis_async(s, thesis_info["id"])
 
     change_summary = "\n".join(
         f"- [{ch.get('type', 'change')}] {ch.get('description', '')}"
