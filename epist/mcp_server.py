@@ -17,6 +17,7 @@ from epist.model import DefeaterStatus
 from epist.agent import (
     generate_full_graph_async,
     enhance_thesis_async,
+    synthesize_thesis_async,
     compute_summary,
     count_subgraph,
     list_theses,
@@ -619,6 +620,261 @@ async def show_graph(workspace: str) -> str:
                 lines.append(f"        ID: `{aid[:16]}`")
 
     return "\n".join(lines)
+
+
+# ── Fork-and-merge tools ─────────────────────────────────────────────
+
+import re as _re
+_BRANCH_NAME_RE = _re.compile(r"^[a-z0-9][a-z0-9._/-]*$")
+
+
+def _validate_branch_name(name: str) -> bool:
+    if not name or len(name) > 64:
+        return False
+    if ".." in name or name.startswith("/") or name.endswith("/"):
+        return False
+    return bool(_BRANCH_NAME_RE.match(name))
+
+
+def _autosave_if_dirty(s, label: str = "auto-save"):
+    if s.is_git_repo() and s.git_has_changes():
+        s.git_commit(f"[manual] {label}")
+
+
+@mcp.tool()
+async def fork_workspace(workspace: str, fork_name: str) -> str:
+    """Create a new fork (git branch) of an argument graph workspace.
+
+    Forks let you explore alternative framings without losing the original.
+    The new branch starts at the current state and can be developed
+    independently. Use compare_forks to see how forks differ, and
+    merge_forks to combine insights.
+
+    Args:
+        workspace: Workspace name or path
+        fork_name: Name for the new fork (lowercase, alphanumeric, hyphens)
+    """
+    s = _get_store(workspace)
+    if not s.is_git_repo():
+        return "Error: not a git-backed workspace"
+    if not _validate_branch_name(fork_name):
+        return f"Error: invalid fork name '{fork_name}'. Use lowercase letters, digits, hyphens, dots, slashes."
+    if s.git_branch_exists(fork_name):
+        return f"Error: fork '{fork_name}' already exists"
+
+    current = s.git_current_branch()
+    _autosave_if_dirty(s, f"auto-save before fork to {fork_name}")
+    s.git_create_branch(fork_name)
+    s.git_commit(f"[fork] Created from {current}")
+
+    return (
+        f"Forked **{current}** → **{fork_name}**\n\n"
+        f"Now on branch '{fork_name}'. Use switch_fork to return to '{current}'."
+    )
+
+
+@mcp.tool()
+async def list_forks(workspace: str) -> str:
+    """List all forks (branches) in a workspace with their thesis text.
+
+    Args:
+        workspace: Workspace name or path
+    """
+    s = _get_store(workspace)
+    if not s.is_git_repo():
+        return "Not a git-backed workspace."
+
+    branches = s.git_list_branches()
+    if not branches:
+        return "No branches found."
+
+    trunk = next((b["name"] for b in branches if b["name"] in ("master", "main")), None)
+
+    lines = [f"**Forks in {s.home.name}**\n"]
+    for b in branches:
+        marker = "→ " if b["is_current"] else "  "
+        thesis = s._git_show_file(b["name"], "thesis.md").strip() or "(no thesis.md)"
+        if len(thesis) > 120:
+            thesis = thesis[:117] + "..."
+        if trunk and b["name"] != trunk:
+            count = s.git_commits_since(b["name"], trunk)
+            commit_str = f" (+{count} commits)"
+        else:
+            commit_str = ""
+        lines.append(f"{marker}**{b['name']}**{commit_str}")
+        lines.append(f"   {thesis}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def switch_fork(workspace: str, fork_name: str) -> str:
+    """Switch to a different fork (branch).
+
+    Args:
+        workspace: Workspace name or path
+        fork_name: Name of the fork to switch to
+    """
+    s = _get_store(workspace)
+    if not s.is_git_repo():
+        return "Error: not a git-backed workspace"
+    if not s.git_branch_exists(fork_name):
+        return f"Error: fork '{fork_name}' does not exist"
+
+    current = s.git_current_branch()
+    if current == fork_name:
+        return f"Already on '{fork_name}'."
+
+    _autosave_if_dirty(s, f"auto-save before switch to {fork_name}")
+    try:
+        s.git_switch_branch(fork_name)
+    except RuntimeError as e:
+        return f"Error: switch failed: {e}"
+
+    thesis = next((c for c in s.claims.values() if c.is_root), None)
+    thesis_text = ""
+    if thesis:
+        thesis_text = thesis.notes or f"{thesis.subject} {thesis.predicate} {thesis.object}"
+
+    return (
+        f"Switched **{current}** → **{fork_name}**\n\n"
+        f"**Thesis:** {thesis_text}\n\n"
+        f"Objects: {len(s.claims)} claims, {len(s.evidence)} evidence, "
+        f"{len(s.arguments)} arguments"
+    )
+
+
+@mcp.tool()
+async def compare_forks(workspace: str, other_branch: str) -> str:
+    """Show a structural diff between the current fork and another fork.
+
+    Compares argument graphs by semantic identity (subject/predicate/object
+    triple), not text. Reports added/removed/modified claims, evidence,
+    arguments, defeaters, and the analysis delta (confidence, ATMS status,
+    coherence issues).
+
+    Args:
+        workspace: Workspace name or path
+        other_branch: Name of the fork to compare against
+    """
+    from epist.compare import compute_graph_diff, compute_analysis_delta, format_diff_markdown
+
+    s = _get_store(workspace)
+    if not s.is_git_repo():
+        return "Error: not a git-backed workspace"
+    if not s.git_branch_exists(other_branch):
+        return f"Error: fork '{other_branch}' does not exist"
+
+    current = s.git_current_branch()
+    if current == other_branch:
+        return f"Cannot compare '{other_branch}' with itself."
+
+    other = s.load_branch_store(other_branch)
+    diff = compute_graph_diff(s, other)
+    delta = compute_analysis_delta(s, other)
+    return format_diff_markdown(diff, delta, current, other_branch)
+
+
+@mcp.tool()
+async def merge_forks(workspace: str, source_branch: str, mode: str = "synthesize") -> str:
+    """Merge another fork into the current one.
+
+    Modes:
+    - 'pick': adopt the source fork wholesale (just switches to that branch)
+    - 'synthesize': use the LLM to synthesize a new thesis incorporating
+      insights from both forks, then generate a new graph on a merge/ branch
+
+    Args:
+        workspace: Workspace name or path
+        source_branch: Name of the fork to merge in
+        mode: 'pick' or 'synthesize' (default: synthesize)
+    """
+    s = _get_store(workspace)
+    if not s.is_git_repo():
+        return "Error: not a git-backed workspace"
+    if not s.git_branch_exists(source_branch):
+        return f"Error: fork '{source_branch}' does not exist"
+
+    current = s.git_current_branch()
+    if current == source_branch:
+        return f"Cannot merge '{source_branch}' with itself."
+
+    if mode == "pick":
+        _autosave_if_dirty(s, f"auto-save before merge from {source_branch}")
+        try:
+            s.git_switch_branch(source_branch)
+        except RuntimeError as e:
+            return f"Error: switch failed: {e}"
+        return f"Adopted fork **{source_branch}** wholesale. Now on that branch."
+
+    if mode != "synthesize":
+        return f"Error: unknown mode '{mode}'. Use 'pick' or 'synthesize'."
+
+    # Synthesize mode
+    other = s.load_branch_store(source_branch)
+    try:
+        result = await synthesize_thesis_async(current, s, source_branch, other)
+    except Exception as e:
+        return f"Error: synthesis failed: {e}"
+
+    # Create merge branch
+    merge_branch = f"merge/{source_branch}-into-{current}"
+    if not _validate_branch_name(merge_branch):
+        merge_branch = f"merge-{current}-{source_branch}"
+    if s.git_branch_exists(merge_branch):
+        import time as _time
+        merge_branch = f"{merge_branch}-{int(_time.time())}"
+
+    _autosave_if_dirty(s, "auto-save before merge synthesis")
+    s.git_create_branch(merge_branch)
+    s.clear()
+
+    try:
+        new_thesis_id = await generate_full_graph_async(s, result["synthesized_thesis"])
+    except Exception as e:
+        return f"Error: graph generation failed: {e}"
+
+    new_summary = compute_summary(s, new_thesis_id)
+    (s.home / "summary.md").write_text(new_summary["markdown"])
+
+    counts = count_subgraph(s, new_thesis_id)
+
+    incorp_lines = ""
+    for x in result.get("incorporated_from_a", []):
+        incorp_lines += f"\n- [from {current}] {x}"
+    for x in result.get("incorporated_from_b", []):
+        incorp_lines += f"\n- [from {source_branch}] {x}"
+    for x in result.get("resolved_tensions", []):
+        incorp_lines += f"\n- [resolved] {x}"
+
+    short_rationale = result["rationale"][:72] + ("..." if len(result["rationale"]) > 72 else "")
+    s.git_commit(
+        f"[merge] {short_rationale}\n\n"
+        f"Synthesized from: {current} + {source_branch}\n"
+        f"Thesis: {result['synthesized_thesis']}\n\n"
+        f"Rationale: {result['rationale']}\n"
+        f"Incorporations:{incorp_lines}\n\n"
+        f"Objects: {counts['claims']} claims, {counts['evidence']} evidence, "
+        f"{counts['arguments']} arguments"
+    )
+
+    from_a = "\n".join(f"- {x}" for x in result.get("incorporated_from_a", []))
+    from_b = "\n".join(f"- {x}" for x in result.get("incorporated_from_b", []))
+    tensions = "\n".join(f"- {x}" for x in result.get("resolved_tensions", []))
+
+    return (
+        f"## Merge complete\n\n"
+        f"**New branch:** `{merge_branch}`\n\n"
+        f"## Synthesized thesis\n\n{result['synthesized_thesis']}\n\n"
+        f"## Rationale\n\n{result['rationale']}\n\n"
+        f"## Incorporated from {current}\n\n{from_a or '_(none)_'}\n\n"
+        f"## Incorporated from {source_branch}\n\n{from_b or '_(none)_'}\n\n"
+        f"## Resolved tensions\n\n{tensions or '_(none)_'}\n\n"
+        f"## New graph\n\n"
+        f"Created: {counts['claims']} claims, {counts['evidence']} evidence, "
+        f"{counts['arguments']} arguments"
+    )
 
 
 # ── Entry point ──────────────────────────────────────────────────────

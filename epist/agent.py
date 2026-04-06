@@ -376,3 +376,99 @@ def enhance_thesis(store, thesis_id: str) -> dict:
 
 # Async version for MCP server
 enhance_thesis_async = _enhance_thesis_async
+
+
+# ── Synthesis (LLM-mediated merge of two forks) ──────────────────────
+
+class Synthesis(BaseModel):
+    synthesized_thesis: str
+    rationale: str
+    incorporated_from_a: list[str]
+    incorporated_from_b: list[str]
+    resolved_tensions: list[str]
+
+
+SYNTHESIZE_SYSTEM = """\
+You are an epistemic analyst. Two forks of an argument graph have been \
+developed independently. Each represents a different framing of the same \
+underlying question.
+
+Your task: synthesize a new thesis that incorporates the strongest insights \
+from both forks while resolving their disagreements. The synthesis should be \
+stronger than either fork alone — it should not simply concatenate them.
+
+Guidelines:
+1. Preserve the empirical claims that both forks support
+2. Reconcile contradictory framings by finding a more precise statement
+3. Carry forward defeaters that neither fork has answered
+4. Carry forward responses to defeaters from whichever fork answered them
+5. Be intellectually honest about remaining tensions
+"""
+
+
+async def _synthesize_thesis_async(label_a: str, store_a, label_b: str, store_b) -> dict:
+    """Synthesize a new thesis from two forks via Agent SDK query.
+    Returns {synthesized_thesis, rationale, incorporated_from_a,
+    incorporated_from_b, resolved_tensions}.
+    """
+    from claude_agent_sdk import query, ClaudeAgentOptions, ResultMessage
+    from epist.compare import compute_graph_diff, compute_analysis_delta, format_diff_markdown
+
+    summary_a = compute_summary(store_a)
+    summary_b = compute_summary(store_b)
+    if not summary_a.get("thesis") or not summary_b.get("thesis"):
+        raise RuntimeError("Both forks must have a thesis")
+
+    diff = compute_graph_diff(store_a, store_b)
+    delta = compute_analysis_delta(store_a, store_b)
+    diff_md = format_diff_markdown(diff, delta, label_a, label_b)
+
+    prompt = (
+        f"## Fork A: {label_a}\n\n"
+        f"Thesis: {summary_a['thesis']['notes'] or summary_a['thesis']['label']}\n\n"
+        f"Analysis summary:\n{summary_a['markdown']}\n\n"
+        f"## Fork B: {label_b}\n\n"
+        f"Thesis: {summary_b['thesis']['notes'] or summary_b['thesis']['label']}\n\n"
+        f"Analysis summary:\n{summary_b['markdown']}\n\n"
+        f"## Structural diff\n\n{diff_md}\n\n"
+        f"---\n\nReturn a JSON object with keys: "
+        "synthesized_thesis (string), rationale (string), "
+        "incorporated_from_a (array of strings), "
+        "incorporated_from_b (array of strings), "
+        "resolved_tensions (array of strings). Return ONLY the JSON."
+    )
+
+    result_text = ""
+    async for message in query(
+        prompt=prompt,
+        options=ClaudeAgentOptions(
+            system_prompt=SYNTHESIZE_SYSTEM,
+            model="claude-opus-4-6",
+            allowed_tools=[],
+            max_turns=1,
+        ),
+    ):
+        if isinstance(message, ResultMessage):
+            result_text = message.result
+
+    raw = result_text.strip()
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[1]
+        if raw.endswith("```"):
+            raw = raw[:-3]
+    result = Synthesis.model_validate_json(raw)
+    return {
+        "synthesized_thesis": result.synthesized_thesis,
+        "rationale": result.rationale,
+        "incorporated_from_a": result.incorporated_from_a,
+        "incorporated_from_b": result.incorporated_from_b,
+        "resolved_tensions": result.resolved_tensions,
+    }
+
+
+def synthesize_thesis(label_a: str, store_a, label_b: str, store_b) -> dict:
+    """Sync wrapper for synthesis."""
+    return anyio.run(_synthesize_thesis_async, label_a, store_a, label_b, store_b)
+
+
+synthesize_thesis_async = _synthesize_thesis_async

@@ -708,6 +708,287 @@ def graph_cmd(ctx):
     console.print()
 
 
+# ── Fork-and-merge commands ──────────────────────────────────────────
+
+import re as _re
+
+_BRANCH_NAME_RE = _re.compile(r"^[a-z0-9][a-z0-9._/-]*$")
+
+
+def _validate_branch_name(name: str) -> bool:
+    if not name or len(name) > 64:
+        return False
+    if ".." in name or name.startswith("/") or name.endswith("/"):
+        return False
+    return bool(_BRANCH_NAME_RE.match(name))
+
+
+def _autosave_if_dirty(s, label: str = "auto-save"):
+    if s.is_git_repo() and s.git_has_changes():
+        s.git_commit(f"[manual] {label}")
+
+
+@cli.command("fork")
+@click.argument("name")
+@click.pass_context
+def fork(ctx, name):
+    """Create a new fork (branch) from the current state."""
+    s = get_store(ctx.obj["home"])
+    if not s.is_git_repo():
+        console.print("[red]Not a git-backed workspace.[/red]")
+        return
+    if not _validate_branch_name(name):
+        console.print(f"[red]Invalid fork name:[/red] {name}")
+        console.print("[dim]Use lowercase, alphanumeric, hyphens, dots, or slashes.[/dim]")
+        return
+    if s.git_branch_exists(name):
+        console.print(f"[red]Fork already exists:[/red] {name}")
+        return
+
+    current = s.git_current_branch()
+    _autosave_if_dirty(s, f"auto-save before fork to {name}")
+    s.git_create_branch(name)
+    s.git_commit(f"[fork] Created from {current}")
+
+    console.print(f"[green]✓[/green] Forked [cyan]{current}[/cyan] → [bold cyan]{name}[/bold cyan]")
+    console.print(f"  [dim]Now on branch '{name}'. Use 'epist switch {current}' to go back.[/dim]")
+
+
+@cli.command("forks")
+@click.pass_context
+def forks(ctx):
+    """List all forks (branches) with their thesis text."""
+    s = get_store(ctx.obj["home"])
+    if not s.is_git_repo():
+        console.print("[dim]Not a git-backed workspace.[/dim]")
+        return
+
+    branches = s.git_list_branches()
+    if not branches:
+        console.print("[dim]No branches found.[/dim]")
+        return
+
+    # Find the trunk (master or main)
+    trunk = None
+    for b in branches:
+        if b["name"] in ("master", "main"):
+            trunk = b["name"]
+            break
+
+    table = Table(box=box.SIMPLE, title=f"Forks in {s.home.name}")
+    table.add_column("", width=2)
+    table.add_column("Name", style="cyan")
+    table.add_column("Commits", justify="right", style="dim")
+    table.add_column("Thesis")
+
+    for b in branches:
+        marker = "→" if b["is_current"] else " "
+        # Get thesis text from this branch
+        thesis_text = s._git_show_file(b["name"], "thesis.md").strip()
+        if not thesis_text:
+            thesis_text = "(no thesis.md)"
+        if len(thesis_text) > 80:
+            thesis_text = thesis_text[:77] + "..."
+
+        # Count commits since divergence from trunk
+        if trunk and b["name"] != trunk:
+            count = s.git_commits_since(b["name"], trunk)
+            commit_str = f"+{count}"
+        else:
+            commit_str = "—"
+
+        name_display = f"[bold]{b['name']}[/bold]" if b["is_current"] else b["name"]
+        table.add_row(marker, name_display, commit_str, thesis_text)
+
+    console.print(table)
+
+
+@cli.command("switch")
+@click.argument("name")
+@click.pass_context
+def switch_cmd(ctx, name):
+    """Switch to a different fork (branch)."""
+    s = get_store(ctx.obj["home"])
+    if not s.is_git_repo():
+        console.print("[red]Not a git-backed workspace.[/red]")
+        return
+    if not s.git_branch_exists(name):
+        console.print(f"[red]Fork not found:[/red] {name}")
+        return
+
+    current = s.git_current_branch()
+    if current == name:
+        console.print(f"[dim]Already on '{name}'.[/dim]")
+        return
+
+    _autosave_if_dirty(s, f"auto-save before switch to {name}")
+
+    try:
+        s.git_switch_branch(name)
+    except RuntimeError as e:
+        console.print(f"[red]Switch failed:[/red] {e}")
+        return
+
+    thesis = next((c for c in s.claims.values() if c.is_root), None)
+    console.print(f"[green]✓[/green] Switched [cyan]{current}[/cyan] → [bold cyan]{name}[/bold cyan]")
+    if thesis:
+        thesis_text = thesis.notes or f"{thesis.subject} {thesis.predicate} {thesis.object}"
+        if len(thesis_text) > 100:
+            thesis_text = thesis_text[:97] + "..."
+        console.print(f"  {thesis_text}")
+    console.print(f"  [dim]{len(s.claims)} claims, {len(s.evidence)} evidence, {len(s.arguments)} arguments[/dim]")
+
+
+@cli.command("compare")
+@click.argument("branch")
+@click.pass_context
+def compare_cmd(ctx, branch):
+    """Show a structural diff between the current fork and another."""
+    from epist.compare import compute_graph_diff, compute_analysis_delta, format_diff_markdown
+
+    s = get_store(ctx.obj["home"])
+    if not s.is_git_repo():
+        console.print("[red]Not a git-backed workspace.[/red]")
+        return
+    if not s.git_branch_exists(branch):
+        console.print(f"[red]Fork not found:[/red] {branch}")
+        return
+
+    current = s.git_current_branch()
+    if current == branch:
+        console.print(f"[dim]Cannot compare '{branch}' with itself.[/dim]")
+        return
+
+    other = s.load_branch_store(branch)
+    diff = compute_graph_diff(s, other)
+    delta = compute_analysis_delta(s, other)
+    md = format_diff_markdown(diff, delta, current, branch)
+    console.print()
+    console.print(Markdown(md))
+
+
+@cli.command("merge")
+@click.argument("branch")
+@click.option("--mode", type=click.Choice(["pick", "synthesize"]), default="synthesize")
+@click.option("--yes", "-y", is_flag=True, help="Auto-accept merge")
+@click.pass_context
+def merge_cmd(ctx, branch, mode, yes):
+    """Merge another fork into the current one (pick or synthesize)."""
+    s = get_store(ctx.obj["home"])
+    if not s.is_git_repo():
+        console.print("[red]Not a git-backed workspace.[/red]")
+        return
+    if not s.git_branch_exists(branch):
+        console.print(f"[red]Fork not found:[/red] {branch}")
+        return
+
+    current = s.git_current_branch()
+    if current == branch:
+        console.print(f"[dim]Cannot merge '{branch}' with itself.[/dim]")
+        return
+
+    if mode == "pick":
+        if not yes and not click.confirm(
+            f"Adopt fork '{branch}' wholesale? This switches to that branch.",
+            default=False,
+        ):
+            console.print("[dim]Merge cancelled.[/dim]")
+            return
+        _autosave_if_dirty(s, f"auto-save before merge from {branch}")
+        s.git_switch_branch(branch)
+        console.print(f"[green]✓[/green] Adopted fork [bold cyan]{branch}[/bold cyan]")
+        return
+
+    # mode == synthesize
+    from epist.agent import synthesize_thesis, generate_full_graph, count_subgraph
+    from epist.llm import compute_summary
+
+    other = s.load_branch_store(branch)
+
+    console.print(f"\n[bold]Synthesizing[/bold] [cyan]{current}[/cyan] + [cyan]{branch}[/cyan]...\n")
+
+    with console.status("[bold cyan]Calling LLM...[/bold cyan]"):
+        try:
+            result = synthesize_thesis(current, s, branch, other)
+        except Exception as e:
+            console.print(f"[red]Synthesis failed:[/red] {e}")
+            return
+
+    console.print(Panel(
+        f"[bold green]Synthesized thesis:[/bold green]\n{result['synthesized_thesis']}\n\n"
+        f"[bold]Rationale:[/bold] {result['rationale']}",
+        title=f"Merge: {current} ← {branch}",
+    ))
+
+    if result.get("incorporated_from_a"):
+        console.print(f"\n[bold]From {current}:[/bold]")
+        for x in result["incorporated_from_a"]:
+            console.print(f"  • {x}")
+    if result.get("incorporated_from_b"):
+        console.print(f"\n[bold]From {branch}:[/bold]")
+        for x in result["incorporated_from_b"]:
+            console.print(f"  • {x}")
+    if result.get("resolved_tensions"):
+        console.print(f"\n[bold]Resolved tensions:[/bold]")
+        for x in result["resolved_tensions"]:
+            console.print(f"  • {x}")
+
+    console.print()
+    if not yes and not click.confirm("Create merge branch and generate new graph?", default=False):
+        console.print("[dim]Synthesis discarded.[/dim]")
+        return
+
+    merge_branch = f"merge/{branch}-into-{current}"
+    # Validate
+    if not _validate_branch_name(merge_branch):
+        merge_branch = f"merge-{current}-{branch}"
+    if s.git_branch_exists(merge_branch):
+        merge_branch = f"{merge_branch}-{int(time.time())}"
+
+    _autosave_if_dirty(s, f"auto-save before merge synthesis")
+    s.git_create_branch(merge_branch)
+    s.clear()
+
+    with console.status("[bold cyan]Generating new argument graph...[/bold cyan]"):
+        try:
+            new_thesis_id = generate_full_graph(s, result["synthesized_thesis"])
+        except Exception as e:
+            console.print(f"[red]Generation failed:[/red] {e}")
+            return
+
+    new_summary = compute_summary(s, new_thesis_id)
+    (s.home / "summary.md").write_text(new_summary["markdown"])
+
+    counts = count_subgraph(s, new_thesis_id)
+
+    incorp_lines = ""
+    for x in result.get("incorporated_from_a", []):
+        incorp_lines += f"\n- [from {current}] {x}"
+    for x in result.get("incorporated_from_b", []):
+        incorp_lines += f"\n- [from {branch}] {x}"
+    for x in result.get("resolved_tensions", []):
+        incorp_lines += f"\n- [resolved] {x}"
+
+    short_rationale = result["rationale"][:72] + ("..." if len(result["rationale"]) > 72 else "")
+    s.git_commit(
+        f"[merge] {short_rationale}\n\n"
+        f"Synthesized from: {current} + {branch}\n"
+        f"Thesis: {result['synthesized_thesis']}\n\n"
+        f"Rationale: {result['rationale']}\n"
+        f"Incorporations:{incorp_lines}\n\n"
+        f"Objects: {counts['claims']} claims, {counts['evidence']} evidence, "
+        f"{counts['arguments']} arguments"
+    )
+
+    console.print(
+        f"\n[green]✓[/green] Created merge branch [bold cyan]{merge_branch}[/bold cyan]"
+    )
+    console.print(
+        f"  Created: {counts['claims']} claims, {counts['evidence']} evidence, "
+        f"{counts['arguments']} arguments\n"
+    )
+
+
 # ── LLM-powered commands ─────────────────────────────────────────────
 
 @cli.command("generate")

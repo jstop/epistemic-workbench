@@ -216,6 +216,16 @@ class Store:
         self.foundations.clear()
         self.save()
 
+    def reload(self):
+        """Clear in-memory state and re-read from disk. Used after a branch switch."""
+        self.claims.clear()
+        self.evidence.clear()
+        self.arguments.clear()
+        self.evaluations.clear()
+        self.predictions.clear()
+        self.foundations.clear()
+        self._load()
+
     def init_workspace(self):
         self.home.mkdir(parents=True, exist_ok=True)
         self.save()
@@ -280,3 +290,120 @@ class Store:
                 "date": lines[-1],
             })
         return commits
+
+    # ── Branch operations ────────────────────────────────────────────
+
+    def git_current_branch(self) -> str:
+        """Return current branch name."""
+        result = self._git("rev-parse", "--abbrev-ref", "HEAD", check=False)
+        if result.returncode != 0:
+            return ""
+        return result.stdout.strip()
+
+    def git_has_changes(self) -> bool:
+        """Check if there are uncommitted changes."""
+        result = self._git("status", "--porcelain", check=False)
+        return bool(result.stdout.strip())
+
+    def git_list_branches(self) -> list[dict]:
+        """Return list of branches with {name, commit, is_current}."""
+        if not self.is_git_repo():
+            return []
+        result = self._git(
+            "for-each-ref", "--format=%(refname:short)|%(objectname:short)",
+            "refs/heads/", check=False,
+        )
+        if result.returncode != 0:
+            return []
+        current = self.git_current_branch()
+        branches = []
+        for line in result.stdout.strip().split("\n"):
+            if not line.strip():
+                continue
+            parts = line.split("|")
+            if len(parts) < 2:
+                continue
+            branches.append({
+                "name": parts[0],
+                "commit": parts[1],
+                "is_current": parts[0] == current,
+            })
+        return branches
+
+    def git_branch_exists(self, name: str) -> bool:
+        """Check if a branch exists."""
+        result = self._git("rev-parse", "--verify", f"refs/heads/{name}", check=False)
+        return result.returncode == 0
+
+    def git_create_branch(self, name: str):
+        """Create and switch to a new branch from the current commit."""
+        self._git("checkout", "-b", name)
+
+    def git_switch_branch(self, name: str):
+        """Switch to an existing branch and reload state from disk."""
+        self._git("checkout", name)
+        self.reload()
+
+    def git_divergence_point(self, branch_a: str, branch_b: str) -> str:
+        """Return the common ancestor commit hash."""
+        result = self._git("merge-base", branch_a, branch_b, check=False)
+        if result.returncode != 0:
+            return ""
+        return result.stdout.strip()
+
+    def git_commits_since(self, branch: str, base: str) -> int:
+        """Count commits on `branch` since diverging from `base`."""
+        result = self._git("rev-list", "--count", f"{base}..{branch}", check=False)
+        if result.returncode != 0:
+            return 0
+        try:
+            return int(result.stdout.strip())
+        except ValueError:
+            return 0
+
+    def _git_show_file(self, branch: str, filename: str) -> str:
+        """Read the contents of a file from another branch without switching."""
+        result = self._git("show", f"{branch}:{filename}", check=False)
+        if result.returncode != 0:
+            return ""
+        return result.stdout
+
+    def load_branch_store(self, branch: str) -> "Store":
+        """Build a Store populated from another branch's data via git show.
+        Does NOT switch branches. Returns a temporary Store object suitable
+        for read-only comparison and analysis."""
+        other = Store.__new__(Store)
+        other.home = self.home
+        other.claims = {}
+        other.evidence = {}
+        other.arguments = {}
+        other.evaluations = {}
+        other.predictions = {}
+        other.foundations = {}
+
+        for name, collection, deser in [
+            ("claims", other.claims, _deserialize_claim),
+            ("evidence", other.evidence, _deserialize_evidence),
+            ("arguments", other.arguments, _deserialize_argument),
+            ("evaluations", other.evaluations, _deserialize_evaluation),
+            ("predictions", other.predictions, _deserialize_prediction),
+        ]:
+            content = self._git_show_file(branch, f"{name}.json")
+            if not content.strip():
+                continue
+            try:
+                data = json.loads(content)
+                for d in data:
+                    obj = deser(d)
+                    collection[obj.id] = obj
+            except (json.JSONDecodeError, KeyError):
+                continue
+
+        foundations_content = self._git_show_file(branch, "foundations.json")
+        if foundations_content.strip():
+            try:
+                other.foundations = json.loads(foundations_content)
+            except json.JSONDecodeError:
+                pass
+
+        return other
