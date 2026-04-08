@@ -195,10 +195,14 @@ GENERATE_SYSTEM = """\
 You are an epistemic analyst. Decompose the given thesis into a \
 structured argument graph by calling the provided tools.
 
+CRITICAL: Your very first tool call MUST be create_claim with is_root=true \
+to create the root thesis claim. Do not call any other tools before this. \
+Without this, the entire graph will fail to load.
+
 Work step by step:
-1. Create the root thesis claim using create_claim with is_root=true. \
-   Use the full thesis text as 'notes'. Use short-hyphenated strings for \
-   subject/predicate/object (e.g. "climate-change", "causes", "sea-level-rise").
+1. FIRST: Call create_claim with is_root=true. Use the full thesis text as \
+   'notes'. Use short-hyphenated strings for subject/predicate/object \
+   (e.g. "climate-change", "causes", "sea-level-rise").
 2. Create 3-5 supporting sub-claims that decompose the thesis into testable parts.
 3. Create 2-4 pieces of evidence (real or plausible) supporting the claims.
 4. Create arguments linking premises (claim/evidence IDs) to conclusions, \
@@ -236,17 +240,59 @@ async def _generate_full_graph_async(store, thesis_text: str, on_tool_call=None)
         permission_mode="bypassPermissions",
     )
 
+    final_result_text = ""
     async with ClaudeSDKClient(options=options) as client:
         await client.query(f"Decompose this thesis into an argument graph:\n\n{thesis_text}")
         async for message in client.receive_response():
             if isinstance(message, ResultMessage):
+                final_result_text = str(message.result or "")
                 break
 
     # Find root thesis
     for cid, c in store.claims.items():
         if c.is_root:
             return cid
-    raise RuntimeError("Agent did not create a root thesis claim")
+
+    # No claim was marked is_root. Diagnose why.
+    if not store.claims:
+        # Agent didn't create any claims at all — likely an API/credit/auth error
+        snippet = final_result_text.strip()[:500] if final_result_text else "(no result message)"
+        raise RuntimeError(
+            f"Agent created no claims. This usually means the LLM call failed.\n"
+            f"Agent response: {snippet}"
+        )
+
+    # Claims exist but none marked is_root — fall back to topological detection.
+    # The root is the claim that's a conclusion of an argument but never a premise.
+    premise_ids = set()
+    conclusion_ids = set()
+    for arg in store.arguments.values():
+        conclusion_ids.add(arg.conclusion)
+        for pid in arg.premises:
+            premise_ids.add(pid)
+    candidates = [cid for cid in conclusion_ids if cid in store.claims and cid not in premise_ids]
+
+    if len(candidates) == 1:
+        # Unambiguous topological root — promote it
+        store.claims[candidates[0]].is_root = True
+        store.save()
+        return candidates[0]
+
+    if candidates:
+        # Multiple candidates — pick the one with most supporting arguments
+        best = max(
+            candidates,
+            key=lambda cid: sum(1 for a in store.arguments.values() if a.conclusion == cid),
+        )
+        store.claims[best].is_root = True
+        store.save()
+        return best
+
+    # No clear topological root — pick the first claim as a last resort
+    first_cid = next(iter(store.claims))
+    store.claims[first_cid].is_root = True
+    store.save()
+    return first_cid
 
 
 def generate_full_graph(store, thesis_text: str, on_tool_call=None) -> str:
