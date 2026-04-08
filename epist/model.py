@@ -51,9 +51,10 @@ class DefeaterType(Enum):
 
 
 class DefeaterStatus(Enum):
-    ACTIVE = "active"
-    ANSWERED = "answered"
-    WITHDRAWN = "withdrawn"
+    ACTIVE = "active"          # unaddressed objection (defeats argument)
+    ANSWERED = "answered"      # rebutted with a counter-response (no longer defeats)
+    CONCEDED = "conceded"      # accepted as a valid criticism (still defeats, but acknowledged)
+    WITHDRAWN = "withdrawn"    # original objection no longer stands (does not defeat)
 
 
 class EvaluationJudgment(Enum):

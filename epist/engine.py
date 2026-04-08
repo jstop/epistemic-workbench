@@ -55,12 +55,16 @@ def compute_atms(store):
             has_defeated_premise = any(
                 status.get(p) == ATMSStatus.DEFEATED for p in arg.premises
             )
-            # Check defeaters
-            has_active_defeater = any(
-                d.status == DefeaterStatus.ACTIVE for d in arg.defeaters
+            # Defeaters that still defeat the argument:
+            # - ACTIVE: unaddressed objection
+            # - CONCEDED: explicitly accepted as a valid criticism
+            # ANSWERED and WITHDRAWN do not defeat.
+            has_defeating_defeater = any(
+                d.status in (DefeaterStatus.ACTIVE, DefeaterStatus.CONCEDED)
+                for d in arg.defeaters
             )
 
-            if has_active_defeater or has_defeated_premise:
+            if has_defeating_defeater or has_defeated_premise:
                 new_status = ATMSStatus.DEFEATED
             elif premise_ok and len(arg.premises) > 0:
                 new_status = ATMSStatus.ACCEPTED

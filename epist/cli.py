@@ -522,6 +522,54 @@ def respond(ctx, arg_id, response, defeater):
         console.print(f"\n  Thesis status: [bold]{st}[/bold]")
 
 
+@cli.command("concede")
+@click.argument("arg_id")
+@click.argument("note")
+@click.option("--defeater", "-d", type=int, default=None, help="Defeater index (default: first active)")
+@click.pass_context
+def concede(ctx, arg_id, note, defeater):
+    """Concede a defeater — accept it as a valid criticism that still defeats the argument.
+
+    Unlike 'respond' (which rebuts), 'concede' acknowledges the defeater is valid.
+    The argument remains defeated in the ATMS, but the defeater is explicitly
+    marked as accepted rather than unaddressed.
+    """
+    s = get_store(ctx.obj["home"])
+    obj = s.get(arg_id)
+    if not obj or not hasattr(obj, 'defeaters'):
+        console.print(f"[red]Argument not found: {arg_id}[/red]")
+        return
+
+    if defeater is not None:
+        if defeater < 0 or defeater >= len(obj.defeaters):
+            console.print(f"[red]Defeater index {defeater} out of range (0-{len(obj.defeaters)-1})[/red]")
+            return
+        d = obj.defeaters[defeater]
+    else:
+        d = next((d for d in obj.defeaters if d.status == DefeaterStatus.ACTIVE), None)
+        if not d:
+            console.print("[dim]No active defeaters on this argument.[/dim]")
+            return
+
+    d.status = DefeaterStatus.CONCEDED
+    d.response = note
+    s.save()
+
+    _git_commit_manual(s, f"Concede defeater: {d.description[:50]}")
+
+    console.print(f"[yellow]✓[/yellow] Defeater conceded (accepted as valid criticism)")
+    console.print(f"  [dim]{d.type.value}:[/dim] {d.description[:80]}")
+    console.print(f"  [yellow]Conceded:[/yellow] {note}")
+    console.print(f"  [dim]The argument remains defeated. Consider narrowing the thesis[/dim]")
+    console.print(f"  [dim]or using 'set-confidence' to lower it accordingly.[/dim]")
+
+    atms = compute_atms(s)
+    thesis = _find_root_thesis(s)
+    if thesis:
+        st = atms.get(thesis.id, "unknown")
+        console.print(f"\n  Thesis status: [bold]{st}[/bold]")
+
+
 @cli.command("add-evidence")
 @click.argument("claim_id")
 @click.option("--title", "-t", required=True)

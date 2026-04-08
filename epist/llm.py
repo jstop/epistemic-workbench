@@ -386,12 +386,14 @@ def compute_summary(store, thesis_id=None) -> dict:
     claims_in_subgraph = [nid for nid in subgraph_nodes if nid in store.claims]
     claims_with_support = len(set(a.conclusion for a in subgraph_arg_objs))
     active_defeaters = sum(1 for d in all_defeaters if d["status"] == "active")
+    conceded_defeaters = sum(1 for d in all_defeaters if d["status"] == "conceded")
 
     assessment = {
         "thesis_confidence": thesis.confidence.level,
         "average_argument_strength": sum(arg_confidences) / len(arg_confidences) if arg_confidences else 0,
         "claims_supported": f"{claims_with_support}/{len(claims_in_subgraph)}",
         "active_defeaters": active_defeaters,
+        "conceded_defeaters": conceded_defeaters,
         "atms_status": atms.get(thesis_id, "unknown"),
     }
 
@@ -419,14 +421,21 @@ def compute_summary(store, thesis_id=None) -> dict:
             if arg["defeaters"]:
                 md.append("")
                 for d in arg["defeaters"]:
-                    status_marker = "ACTIVE" if d["status"] == "active" else d["status"]
+                    status_marker = {
+                        "active": "ACTIVE",
+                        "conceded": "CONCEDED",
+                        "answered": "answered",
+                        "withdrawn": "withdrawn",
+                    }.get(d["status"], d["status"])
                     md.append(f"- **Objection [{status_marker}]:** {d['description']}")
                     if d["response"]:
-                        md.append(f"  - *Response:* {d['response']}")
+                        label = "Conceded" if d["status"] == "conceded" else "Response"
+                        md.append(f"  - *{label}:* {d['response']}")
             md.append("")
 
     active = [d for d in all_defeaters if d["status"] == "active"]
     answered = [d for d in all_defeaters if d["status"] == "answered"]
+    conceded = [d for d in all_defeaters if d["status"] == "conceded"]
 
     if all_defeaters:
         md.append("## Known Objections")
@@ -436,8 +445,15 @@ def compute_summary(store, thesis_id=None) -> dict:
             for d in active:
                 md.append(f"- [{d['type']}] {d['description']} *(on: {d['argument_label']})*")
             md.append("")
+        if conceded:
+            md.append("### Conceded (acknowledged limitations)")
+            for d in conceded:
+                md.append(f"- [{d['type']}] {d['description']} *(on: {d['argument_label']})*")
+                if d["response"]:
+                    md.append(f"  - *Conceded:* {d['response']}")
+            md.append("")
         if answered:
-            md.append("### Answered")
+            md.append("### Answered (rebutted)")
             for d in answered:
                 md.append(f"- ~~{d['description']}~~ — {d['response'] or '(no response recorded)'}")
             md.append("")
@@ -472,6 +488,8 @@ def compute_summary(store, thesis_id=None) -> dict:
     md.append(f"- **Average argument strength:** {assessment['average_argument_strength']:.0%}")
     md.append(f"- **Claims with support:** {assessment['claims_supported']}")
     md.append(f"- **Active defeaters:** {assessment['active_defeaters']}")
+    if assessment.get("conceded_defeaters"):
+        md.append(f"- **Conceded defeaters:** {assessment['conceded_defeaters']}")
     md.append(f"- **Overall status:** {assessment['atms_status']}")
 
     return {
@@ -507,6 +525,7 @@ def enhance_thesis(store, thesis_id: str) -> dict:
     assessment = summary["confidence_assessment"]
 
     active_objections = [o for o in objections if o["status"] == "active"]
+    conceded_objections = [o for o in objections if o["status"] == "conceded"]
 
     context_parts = [f"Original thesis: {thesis['notes'] or thesis['label']}"]
 
@@ -517,6 +536,18 @@ def enhance_thesis(store, thesis_id: str) -> dict:
             for p in a["premises"]:
                 lines.append(f"  - [{p['type']}] {p['label']}")
         context_parts.append(f"Supporting arguments ({len(supporting)}):\n" + "\n".join(lines))
+
+    if conceded_objections:
+        lines = [
+            f"- [{o['type']}] {o['description']}"
+            + (f"\n    Conceded: {o['response']}" if o.get("response") else "")
+            for o in conceded_objections
+        ]
+        context_parts.append(
+            f"Conceded objections ({len(conceded_objections)}) — these are valid criticisms "
+            f"the author has accepted; the refined thesis should explicitly acknowledge them "
+            f"and narrow scope or add caveats accordingly:\n" + "\n".join(lines)
+        )
 
     if active_objections:
         lines = [f"- [{o['type']}] {o['description']}" for o in active_objections]

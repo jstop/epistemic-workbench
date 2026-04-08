@@ -343,15 +343,19 @@ async def get_workspace_stats(workspace: str) -> str:
 
 @mcp.tool()
 async def respond_to_defeater(workspace: str, argument_id: str, response: str, defeater_index: int = -1) -> str:
-    """Respond to a defeater on an argument, marking it as answered.
+    """Rebut a defeater on an argument with a counter-response.
 
-    The response is recorded and the defeater status changes from active to
-    answered, which may change the ATMS status of the thesis.
+    Use this when you have a counter-argument that addresses the objection
+    so the defeater no longer applies. The defeater is marked 'answered'
+    and the engine treats the argument as no longer defeated by it.
+
+    For accepting a defeater as valid (rather than rebutting it), use
+    concede_defeater instead.
 
     Args:
         workspace: Workspace name or path
         argument_id: ID (or prefix) of the argument with the defeater
-        response: Your response explaining why this defeater is addressed
+        response: Your counter-argument explaining why the defeater fails
         defeater_index: Which defeater to respond to (-1 = first active)
     """
     s = _get_store(workspace)
@@ -382,9 +386,67 @@ async def respond_to_defeater(workspace: str, argument_id: str, response: str, d
     thesis_status = atms.get(thesis.id, "unknown") if thesis else "unknown"
 
     return (
-        f"Defeater marked as answered.\n\n"
+        f"Defeater marked as answered (rebutted).\n\n"
         f"**Defeater:** {d.description}\n"
         f"**Response:** {response}\n\n"
+        f"Thesis ATMS status: **{thesis_status}**"
+    )
+
+
+@mcp.tool()
+async def concede_defeater(workspace: str, argument_id: str, note: str, defeater_index: int = -1) -> str:
+    """Concede a defeater — accept it as a valid criticism that still defeats the argument.
+
+    Unlike respond_to_defeater (which rebuts), this acknowledges the defeater
+    is correct. The argument remains DEFEATED in the ATMS, but the defeater
+    is explicitly marked as accepted rather than unaddressed. This is the
+    epistemically honest move when the objection is genuinely valid — the
+    thesis should usually be narrowed or qualified afterwards.
+
+    Use this when:
+    - The objection is correct and your thesis should be weaker
+    - You want the graph to show "I considered this and accepted it"
+      rather than "this is unanswered"
+    - You plan to revise the thesis to incorporate the limitation
+
+    Args:
+        workspace: Workspace name or path
+        argument_id: ID (or prefix) of the argument with the defeater
+        note: Your acknowledgment — what you're conceding and why
+        defeater_index: Which defeater to concede (-1 = first active)
+    """
+    s = _get_store(workspace)
+    obj = s.get(argument_id)
+    if not obj or not hasattr(obj, 'defeaters'):
+        return f"Error: argument not found: {argument_id}"
+
+    if defeater_index >= 0:
+        if defeater_index >= len(obj.defeaters):
+            return f"Error: defeater index {defeater_index} out of range (0-{len(obj.defeaters)-1})"
+        d = obj.defeaters[defeater_index]
+    else:
+        d = next((d for d in obj.defeaters if d.status == DefeaterStatus.ACTIVE), None)
+        if not d:
+            return "No active defeaters on this argument."
+
+    d.status = DefeaterStatus.CONCEDED
+    d.response = note
+    s.save()
+
+    if s.is_git_repo():
+        s.git_commit(f"[manual] Concede defeater: {d.description[:50]}")
+
+    from epist.engine import compute_atms
+    atms = compute_atms(s)
+    thesis = next((c for c in s.claims.values() if c.is_root), None)
+    thesis_status = atms.get(thesis.id, "unknown") if thesis else "unknown"
+
+    return (
+        f"Defeater conceded (accepted as valid).\n\n"
+        f"**Defeater:** {d.description}\n"
+        f"**Conceded:** {note}\n\n"
+        f"The argument remains defeated. Consider narrowing the thesis or "
+        f"using set_confidence to lower it accordingly.\n\n"
         f"Thesis ATMS status: **{thesis_status}**"
     )
 
