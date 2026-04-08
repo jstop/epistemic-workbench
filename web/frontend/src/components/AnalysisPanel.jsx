@@ -29,31 +29,37 @@ function Section({ title, children, defaultOpen = true }) {
   );
 }
 
-export default function AnalysisPanel({ selectedId, onSelectNode, onHighlight }) {
+export default function AnalysisPanel({ workspace, selectedId, onSelectNode, onHighlight }) {
   const [coherence, setCoherence] = useState([]);
   const [blindSpots, setBlindSpots] = useState([]);
   const [stressTest, setStressTest] = useState(null);
   const [assumptions, setAssumptions] = useState([]);
 
   useEffect(() => {
-    api.getCoherence().then(setCoherence).catch(() => {});
-    api.getBlindSpots().then(setBlindSpots).catch(() => {});
-  }, []);
+    if (!workspace) return;
+    api.getCoherence(workspace).then(setCoherence).catch(() => {});
+    api.getBlindSpots(workspace).then(setBlindSpots).catch(() => {});
+  }, [workspace]);
 
   useEffect(() => {
-    if (!selectedId) {
+    if (!workspace || !selectedId) {
       setStressTest(null);
       setAssumptions([]);
       return;
     }
-    api.getStressTest(selectedId).then(setStressTest).catch(() => setStressTest(null));
-    api.getAssumptions(selectedId).then(setAssumptions).catch(() => setAssumptions([]));
-  }, [selectedId]);
+    api.getStressTest(workspace, selectedId).then(setStressTest).catch(() => setStressTest(null));
+    api.getAssumptions(workspace, selectedId).then(setAssumptions).catch(() => setAssumptions([]));
+  }, [workspace, selectedId]);
 
   const refresh = () => {
-    api.getCoherence().then(setCoherence).catch(() => {});
-    api.getBlindSpots().then(setBlindSpots).catch(() => {});
+    if (!workspace) return;
+    api.getCoherence(workspace).then(setCoherence).catch(() => {});
+    api.getBlindSpots(workspace).then(setBlindSpots).catch(() => {});
   };
+
+  if (!workspace) {
+    return <div style={{ color: "#555", fontSize: "10px" }}>Select a workspace first.</div>;
+  }
 
   return (
     <div>

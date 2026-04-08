@@ -15,11 +15,45 @@ const ATMS_COLORS = {
 
 const DEFEATER_STATUS_COLORS = {
   active: "#f87171",
+  conceded: "#fb923c",
   answered: "#4ade80",
   withdrawn: "#555",
 };
 
-function DefeaterSection({ arguments: args, onUpdated }) {
+function btn(extra = {}) {
+  return {
+    background: "transparent",
+    border: "1px solid #333",
+    color: "#888",
+    borderRadius: "3px",
+    padding: "5px 8px",
+    fontSize: "9px",
+    cursor: "pointer",
+    fontFamily: "'JetBrains Mono', monospace",
+    letterSpacing: "1px",
+    textTransform: "uppercase",
+    ...extra,
+  };
+}
+
+function inputStyle() {
+  return {
+    background: "#0A0A0A",
+    border: "1px solid #222",
+    borderRadius: "3px",
+    color: "#e0e0e0",
+    padding: "6px",
+    fontSize: "10px",
+    fontFamily: "'JetBrains Mono', monospace",
+    outline: "none",
+    width: "100%",
+    boxSizing: "border-box",
+  };
+}
+
+// ── Defeater section (per-argument; supports concede) ──────────────
+
+function DefeaterSection({ workspace, args, onUpdated }) {
   const [newDefeaterArg, setNewDefeaterArg] = useState(null);
   const [newDesc, setNewDesc] = useState("");
   const [newType, setNewType] = useState("undercutting");
@@ -29,13 +63,40 @@ function DefeaterSection({ arguments: args, onUpdated }) {
   );
 
   const handleStatusChange = async (argId, idx, newStatus) => {
-    await api.updateDefeater(argId, idx, { status: newStatus });
+    await api.updateDefeater(workspace, argId, idx, { status: newStatus });
+    onUpdated();
+  };
+
+  const handleAnswer = async (d) => {
+    const response = prompt("How is this defeater answered (rebutted)?");
+    if (response === null) return;
+    await api.respondToDefeater(workspace, {
+      argument_id: d.argumentId,
+      response,
+      defeater_index: d.index,
+    });
+    onUpdated();
+  };
+
+  const handleConcede = async (d) => {
+    const note = prompt(
+      "Concede this defeater (accept it as valid). What part of your thesis are you conceding?"
+    );
+    if (note === null) return;
+    await api.concedeDefeater(workspace, {
+      argument_id: d.argumentId,
+      note,
+      defeater_index: d.index,
+    });
     onUpdated();
   };
 
   const handleAddDefeater = async () => {
     if (!newDefeaterArg || !newDesc.trim()) return;
-    await api.addDefeater(newDefeaterArg, { type: newType, description: newDesc.trim() });
+    await api.addDefeater(workspace, newDefeaterArg, {
+      type: newType,
+      description: newDesc.trim(),
+    });
     setNewDesc("");
     setNewDefeaterArg(null);
     onUpdated();
@@ -69,53 +130,47 @@ function DefeaterSection({ arguments: args, onUpdated }) {
               {d.description}
             </div>
             {d.response && (
-              <div style={{ fontSize: "10px", color: "#4ade80", lineHeight: "1.4", marginBottom: "6px", paddingLeft: "8px", borderLeft: "2px solid #333" }}>
-                Response: {d.response}
+              <div style={{
+                fontSize: "10px",
+                color: d.status === "conceded" ? "#fb923c" : "#4ade80",
+                lineHeight: "1.4", marginBottom: "6px",
+                paddingLeft: "8px", borderLeft: "2px solid #333",
+              }}>
+                {d.status === "conceded" ? "Conceded: " : "Response: "}{d.response}
               </div>
             )}
             <div style={{ fontSize: "9px", color: "#444", marginBottom: "4px" }}>
               on: {d.argumentLabel || d.argumentId.slice(0, 12) + "…"}
             </div>
-            <div style={{ display: "flex", gap: "4px" }}>
+            <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
               {d.status === "active" && (
                 <>
                   <button
-                    onClick={() => {
-                      const response = prompt("How is this defeater answered?");
-                      if (response !== null) {
-                        api.updateDefeater(d.argumentId, d.index, { status: "answered", response }).then(onUpdated);
-                      }
-                    }}
-                    style={{
-                      background: "#4ade8022", border: "1px solid #4ade80", color: "#4ade80",
-                      borderRadius: "3px", padding: "3px 8px", fontSize: "9px", cursor: "pointer",
-                      fontFamily: "'JetBrains Mono', monospace",
-                    }}
+                    onClick={() => handleAnswer(d)}
+                    style={btn({ background: "#4ade8022", borderColor: "#4ade80", color: "#4ade80" })}
                   >
-                    ANSWER
+                    Answer
+                  </button>
+                  <button
+                    onClick={() => handleConcede(d)}
+                    style={btn({ background: "#fb923c22", borderColor: "#fb923c", color: "#fb923c" })}
+                  >
+                    Concede
                   </button>
                   <button
                     onClick={() => handleStatusChange(d.argumentId, d.index, "withdrawn")}
-                    style={{
-                      background: "transparent", border: "1px solid #333", color: "#666",
-                      borderRadius: "3px", padding: "3px 8px", fontSize: "9px", cursor: "pointer",
-                      fontFamily: "'JetBrains Mono', monospace",
-                    }}
+                    style={btn()}
                   >
-                    WITHDRAW
+                    Withdraw
                   </button>
                 </>
               )}
               {d.status !== "active" && (
                 <button
                   onClick={() => handleStatusChange(d.argumentId, d.index, "active")}
-                  style={{
-                    background: "#f8717122", border: "1px solid #f87171", color: "#f87171",
-                    borderRadius: "3px", padding: "3px 8px", fontSize: "9px", cursor: "pointer",
-                    fontFamily: "'JetBrains Mono', monospace",
-                  }}
+                  style={btn({ background: "#f8717122", borderColor: "#f87171", color: "#f87171" })}
                 >
-                  REACTIVATE
+                  Reactivate
                 </button>
               )}
             </div>
@@ -123,18 +178,12 @@ function DefeaterSection({ arguments: args, onUpdated }) {
         );
       })}
 
-      {/* Add defeater */}
       {args.length > 0 && (
         <div style={{ marginTop: "6px" }}>
           {newDefeaterArg === null ? (
             <button
               onClick={() => setNewDefeaterArg(args[0].id)}
-              style={{
-                background: "transparent", border: "1px solid #333", color: "#888",
-                borderRadius: "3px", padding: "6px", fontSize: "9px", cursor: "pointer",
-                fontFamily: "'JetBrains Mono', monospace", width: "100%",
-                textTransform: "uppercase", letterSpacing: "1px",
-              }}
+              style={btn({ width: "100%", padding: "6px" })}
             >
               + Add Defeater
             </button>
@@ -142,12 +191,9 @@ function DefeaterSection({ arguments: args, onUpdated }) {
             <div style={{ background: "#141414", borderRadius: "4px", padding: "8px", display: "flex", flexDirection: "column", gap: "6px" }}>
               {args.length > 1 && (
                 <select
-                  value={newDefeaterArg} onChange={(e) => setNewDefeaterArg(e.target.value)}
-                  style={{
-                    background: "#0A0A0A", border: "1px solid #222", borderRadius: "3px",
-                    color: "#e0e0e0", padding: "6px", fontSize: "10px",
-                    fontFamily: "'JetBrains Mono', monospace",
-                  }}
+                  value={newDefeaterArg}
+                  onChange={(e) => setNewDefeaterArg(e.target.value)}
+                  style={inputStyle()}
                 >
                   {args.map((a) => (
                     <option key={a.id} value={a.id}>
@@ -156,34 +202,25 @@ function DefeaterSection({ arguments: args, onUpdated }) {
                   ))}
                 </select>
               )}
-              <select
-                value={newType} onChange={(e) => setNewType(e.target.value)}
-                style={{
-                  background: "#0A0A0A", border: "1px solid #222", borderRadius: "3px",
-                  color: "#e0e0e0", padding: "6px", fontSize: "10px",
-                  fontFamily: "'JetBrains Mono', monospace",
-                }}
-              >
+              <select value={newType} onChange={(e) => setNewType(e.target.value)} style={inputStyle()}>
                 <option value="undercutting">undercutting</option>
                 <option value="rebutting">rebutting</option>
                 <option value="undermining">undermining</option>
               </select>
               <input
-                value={newDesc} onChange={(e) => setNewDesc(e.target.value)}
+                value={newDesc}
+                onChange={(e) => setNewDesc(e.target.value)}
                 placeholder="What challenges this argument?"
                 onKeyDown={(e) => e.key === "Enter" && handleAddDefeater()}
-                style={{
-                  background: "#0A0A0A", border: "1px solid #222", borderRadius: "3px",
-                  color: "#e0e0e0", padding: "6px", fontSize: "10px",
-                  fontFamily: "'JetBrains Mono', monospace", outline: "none",
-                }}
+                style={inputStyle()}
               />
               <div style={{ display: "flex", gap: "4px" }}>
                 <button
                   onClick={handleAddDefeater}
                   disabled={!newDesc.trim()}
                   style={{
-                    flex: 1, background: newDesc.trim() ? "#FF6B35" : "#222",
+                    flex: 1,
+                    background: newDesc.trim() ? "#FF6B35" : "#222",
                     color: newDesc.trim() ? "#0A0A0A" : "#555",
                     border: "none", borderRadius: "3px", padding: "6px",
                     fontSize: "9px", cursor: newDesc.trim() ? "pointer" : "default",
@@ -194,13 +231,9 @@ function DefeaterSection({ arguments: args, onUpdated }) {
                 </button>
                 <button
                   onClick={() => { setNewDefeaterArg(null); setNewDesc(""); }}
-                  style={{
-                    background: "transparent", border: "1px solid #333", color: "#666",
-                    borderRadius: "3px", padding: "6px", fontSize: "9px", cursor: "pointer",
-                    fontFamily: "'JetBrains Mono', monospace",
-                  }}
+                  style={btn()}
                 >
-                  CANCEL
+                  Cancel
                 </button>
               </div>
             </div>
@@ -211,13 +244,165 @@ function DefeaterSection({ arguments: args, onUpdated }) {
   );
 }
 
-export default function InspectPanel({ node, edges, allNodes, onUpdated, onSelectNode }) {
+// ── Manual intervention shortcuts (claim only) ─────────────────────
+
+function ManualIntervention({ workspace, node, onUpdated }) {
+  const [openForm, setOpenForm] = useState(null); // null | "evidence" | "challenge" | "confidence"
+  const [evTitle, setEvTitle] = useState("");
+  const [evDesc, setEvDesc] = useState("");
+  const [evSource, setEvSource] = useState("");
+  const [evReliability, setEvReliability] = useState(0.7);
+  const [chDesc, setChDesc] = useState("");
+  const [chType, setChType] = useState("undercutting");
+  const [confValue, setConfValue] = useState(node.confidence);
+  const [confNote, setConfNote] = useState("");
+
+  useEffect(() => {
+    setConfValue(node.confidence);
+  }, [node.confidence]);
+
+  const reset = () => {
+    setOpenForm(null);
+    setEvTitle(""); setEvDesc(""); setEvSource(""); setEvReliability(0.7);
+    setChDesc(""); setChType("undercutting");
+    setConfNote("");
+  };
+
+  const submitEvidence = async () => {
+    if (!evTitle.trim() || !evDesc.trim()) return;
+    await api.addEvidenceToClaim(workspace, {
+      claim_id: node.id,
+      title: evTitle.trim(),
+      description: evDesc.trim(),
+      source: evSource,
+      reliability: evReliability,
+    });
+    reset();
+    onUpdated();
+  };
+
+  const submitChallenge = async () => {
+    if (!chDesc.trim()) return;
+    try {
+      await api.challengeClaim(workspace, {
+        claim_id: node.id,
+        description: chDesc.trim(),
+        defeater_type: chType,
+      });
+      reset();
+      onUpdated();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const submitConfidence = async () => {
+    await api.setConfidence(workspace, {
+      claim_id: node.id,
+      confidence: confValue,
+      note: confNote,
+    });
+    reset();
+    onUpdated();
+  };
+
+  return (
+    <div>
+      <label style={{ fontSize: "9px", color: "#555", letterSpacing: "1px", textTransform: "uppercase", marginBottom: "6px", display: "block" }}>
+        Manual Intervention
+      </label>
+
+      {!openForm && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+          <button onClick={() => setOpenForm("evidence")} style={btn({ width: "100%", padding: "6px" })}>
+            + Add evidence
+          </button>
+          <button onClick={() => setOpenForm("challenge")} style={btn({ width: "100%", padding: "6px" })}>
+            + Challenge this claim
+          </button>
+          <button onClick={() => setOpenForm("confidence")} style={btn({ width: "100%", padding: "6px" })}>
+            ⚙ Set confidence
+          </button>
+        </div>
+      )}
+
+      {openForm === "evidence" && (
+        <div style={{ background: "#141414", borderRadius: "4px", padding: "8px", display: "flex", flexDirection: "column", gap: "6px" }}>
+          <input value={evTitle} onChange={(e) => setEvTitle(e.target.value)} placeholder="Title" style={inputStyle()} />
+          <input value={evDesc} onChange={(e) => setEvDesc(e.target.value)} placeholder="Description" style={inputStyle()} />
+          <input value={evSource} onChange={(e) => setEvSource(e.target.value)} placeholder="Source / citation" style={inputStyle()} />
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "2px" }}>
+              <span style={{ fontSize: "9px", color: "#555" }}>RELIABILITY</span>
+              <span style={{ fontSize: "10px", color: "#FF6B35" }}>{(evReliability * 100).toFixed(0)}%</span>
+            </div>
+            <input
+              type="range" min="5" max="99" value={evReliability * 100}
+              onChange={(e) => setEvReliability(parseInt(e.target.value) / 100)}
+              style={{ width: "100%", accentColor: "#FF6B35" }}
+            />
+          </div>
+          <div style={{ display: "flex", gap: "4px" }}>
+            <button onClick={submitEvidence} disabled={!evTitle.trim() || !evDesc.trim()} style={btn({
+              flex: 1, background: "#FF6B3522", borderColor: "#FF6B35", color: "#FF6B35",
+            })}>Add</button>
+            <button onClick={reset} style={btn()}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {openForm === "challenge" && (
+        <div style={{ background: "#141414", borderRadius: "4px", padding: "8px", display: "flex", flexDirection: "column", gap: "6px" }}>
+          <select value={chType} onChange={(e) => setChType(e.target.value)} style={inputStyle()}>
+            <option value="undercutting">undercutting</option>
+            <option value="rebutting">rebutting</option>
+            <option value="undermining">undermining</option>
+          </select>
+          <input value={chDesc} onChange={(e) => setChDesc(e.target.value)} placeholder="What challenges this claim?" style={inputStyle()} />
+          <div style={{ display: "flex", gap: "4px" }}>
+            <button onClick={submitChallenge} disabled={!chDesc.trim()} style={btn({
+              flex: 1, background: "#f8717122", borderColor: "#f87171", color: "#f87171",
+            })}>Challenge</button>
+            <button onClick={reset} style={btn()}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {openForm === "confidence" && (
+        <div style={{ background: "#141414", borderRadius: "4px", padding: "8px", display: "flex", flexDirection: "column", gap: "6px" }}>
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "2px" }}>
+              <span style={{ fontSize: "9px", color: "#555" }}>CONFIDENCE</span>
+              <span style={{ fontSize: "10px", color: "#FF6B35" }}>{(confValue * 100).toFixed(0)}%</span>
+            </div>
+            <input
+              type="range" min="5" max="99" value={confValue * 100}
+              onChange={(e) => setConfValue(parseInt(e.target.value) / 100)}
+              style={{ width: "100%", accentColor: "#FF6B35" }}
+            />
+          </div>
+          <input value={confNote} onChange={(e) => setConfNote(e.target.value)} placeholder="Reason for adjustment (optional)" style={inputStyle()} />
+          <div style={{ display: "flex", gap: "4px" }}>
+            <button onClick={submitConfidence} style={btn({
+              flex: 1, background: "#FF6B3522", borderColor: "#FF6B35", color: "#FF6B35",
+            })}>Save</button>
+            <button onClick={reset} style={btn()}>Cancel</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Main InspectPanel ──────────────────────────────────────────────
+
+export default function InspectPanel({ workspace, node, edges, allNodes, onUpdated, onSelectNode }) {
   const [relatedArgs, setRelatedArgs] = useState([]);
 
   useEffect(() => {
-    if (!node) { setRelatedArgs([]); return; }
-    api.getArgumentsForNode(node.id).then(setRelatedArgs).catch(() => setRelatedArgs([]));
-  }, [node?.id]);
+    if (!workspace || !node) { setRelatedArgs([]); return; }
+    api.getArgumentsForNode(workspace, node.id).then(setRelatedArgs).catch(() => setRelatedArgs([]));
+  }, [workspace, node?.id]);
 
   if (!node) {
     return (
@@ -230,7 +415,6 @@ export default function InspectPanel({ node, edges, allNodes, onUpdated, onSelec
   const color = NODE_COLORS[node.type] || "#60a5fa";
   const atmsColor = ATMS_COLORS[node.atms] || "#555";
 
-  // Find connections
   const connections = edges
     .map((e, i) => ({ edge: e, idx: i }))
     .filter(({ edge }) => {
@@ -248,31 +432,21 @@ export default function InspectPanel({ node, edges, allNodes, onUpdated, onSelec
 
   const handleDelete = async () => {
     if (!confirm(`Delete this ${node.type}?`)) return;
-    if (node.type === "claim") await api.deleteClaim(node.id);
-    else if (node.type === "evidence") await api.deleteEvidence(node.id);
+    if (node.type === "claim") await api.deleteClaim(workspace, node.id);
+    else if (node.type === "evidence") await api.deleteEvidence(workspace, node.id);
     onUpdated();
   };
 
-  const handleConfidenceChange = async (val) => {
-    if (node.type === "claim") {
-      await api.updateClaim(node.id, { confidence: val / 100 });
-      onUpdated();
-    }
-  };
-
-  // Arguments that conclude this node (for defeater management)
   const supportingArgs = relatedArgs.filter((a) => a.conclusion === node.id);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-      {/* Type + ATMS badge */}
       <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
         <span style={{ color, fontSize: "14px" }}>{node.type === "evidence" ? "■" : "●"}</span>
         <span style={{ fontSize: "10px", color: "#555", textTransform: "uppercase", letterSpacing: "1px" }}>{node.type}</span>
         <span style={{ fontSize: "10px", color: atmsColor, marginLeft: "auto", textTransform: "uppercase" }}>{node.atms}</span>
       </div>
 
-      {/* Label */}
       <div>
         <label style={{ fontSize: "9px", color: "#555", letterSpacing: "1px", textTransform: "uppercase" }}>
           {node.type === "claim" ? "Statement" : "Title"}
@@ -288,7 +462,6 @@ export default function InspectPanel({ node, edges, allNodes, onUpdated, onSelec
         </div>
       </div>
 
-      {/* Confidence */}
       <div>
         <div style={{ display: "flex", justifyContent: "space-between" }}>
           <label style={{ fontSize: "9px", color: "#555", letterSpacing: "1px", textTransform: "uppercase" }}>
@@ -299,13 +472,17 @@ export default function InspectPanel({ node, edges, allNodes, onUpdated, onSelec
         <input
           type="range" min="5" max="99"
           value={node.confidence * 100}
-          onChange={(e) => handleConfidenceChange(parseInt(e.target.value))}
-          disabled={node.type !== "claim"}
+          readOnly
+          disabled
           style={{ width: "100%", marginTop: "4px", accentColor: "#FF6B35" }}
         />
+        {node.type === "claim" && (
+          <div style={{ fontSize: "9px", color: "#444", marginTop: "2px" }}>
+            Use "Set confidence" below to change.
+          </div>
+        )}
       </div>
 
-      {/* Modality */}
       {node.modality && (
         <div>
           <label style={{ fontSize: "9px", color: "#555", letterSpacing: "1px", textTransform: "uppercase" }}>Modality</label>
@@ -313,7 +490,6 @@ export default function InspectPanel({ node, edges, allNodes, onUpdated, onSelec
         </div>
       )}
 
-      {/* Notes */}
       {node.notes && (
         <div>
           <label style={{ fontSize: "9px", color: "#555", letterSpacing: "1px", textTransform: "uppercase" }}>Notes</label>
@@ -321,14 +497,13 @@ export default function InspectPanel({ node, edges, allNodes, onUpdated, onSelec
             background: "#141414", border: "1px solid #222", borderRadius: "3px",
             color: "#999", padding: "8px 10px", fontSize: "11px",
             fontFamily: "'JetBrains Mono', monospace", marginTop: "4px",
-            lineHeight: "1.5", wordBreak: "break-word",
+            lineHeight: "1.5", wordBreak: "break-word", whiteSpace: "pre-wrap",
           }}>
             {node.notes}
           </div>
         </div>
       )}
 
-      {/* Connections */}
       <div>
         <label style={{ fontSize: "9px", color: "#555", letterSpacing: "1px", textTransform: "uppercase", marginBottom: "6px", display: "block" }}>
           Connections ({connections.length})
@@ -359,18 +534,25 @@ export default function InspectPanel({ node, edges, allNodes, onUpdated, onSelec
         )}
       </div>
 
-      {/* Defeaters */}
       {node.type === "claim" && (
         <DefeaterSection
-          arguments={supportingArgs}
+          workspace={workspace}
+          args={supportingArgs}
           onUpdated={() => {
-            api.getArgumentsForNode(node.id).then(setRelatedArgs).catch(() => {});
+            api.getArgumentsForNode(workspace, node.id).then(setRelatedArgs).catch(() => {});
             onUpdated();
           }}
         />
       )}
 
-      {/* ID */}
+      {node.type === "claim" && workspace && (
+        <ManualIntervention
+          workspace={workspace}
+          node={node}
+          onUpdated={onUpdated}
+        />
+      )}
+
       <div>
         <label style={{ fontSize: "9px", color: "#555", letterSpacing: "1px", textTransform: "uppercase" }}>ID</label>
         <div style={{ fontSize: "9px", color: "#444", fontFamily: "'JetBrains Mono', monospace", marginTop: "2px", wordBreak: "break-all" }}>
@@ -378,7 +560,6 @@ export default function InspectPanel({ node, edges, allNodes, onUpdated, onSelec
         </div>
       </div>
 
-      {/* Delete */}
       <button
         onClick={handleDelete}
         style={{

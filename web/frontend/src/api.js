@@ -12,53 +12,86 @@ async function request(path, opts = {}) {
   return res.json();
 }
 
-// Workspace
-export const getWorkspace = () => request("/workspace");
+const post = (path, body) =>
+  request(path, { method: "POST", body: JSON.stringify(body) });
+const put = (path, body) =>
+  request(path, { method: "PUT", body: JSON.stringify(body) });
+const del = (path) => request(path, { method: "DELETE" });
 
-// Claims
-export const getClaims = () => request("/claims");
-export const createClaim = (data) => request("/claims", { method: "POST", body: JSON.stringify(data) });
-export const updateClaim = (id, data) => request(`/claims/${id}`, { method: "PUT", body: JSON.stringify(data) });
-export const deleteClaim = (id) => request(`/claims/${id}`, { method: "DELETE" });
+const ws = (name) => `/workspaces/${encodeURIComponent(name)}`;
 
-// Evidence
-export const getEvidence = () => request("/evidence");
-export const createEvidence = (data) => request("/evidence", { method: "POST", body: JSON.stringify(data) });
-export const deleteEvidence = (id) => request(`/evidence/${id}`, { method: "DELETE" });
+// ── Workspaces (top-level) ──────────────────────────────────────────
+export const listWorkspaces = () => request("/workspaces");
+export const createWorkspace = (name) => post("/workspaces", { name });
+export const getWorkspaceInfo = (name) => request(ws(name));
 
-// Arguments
-export const getArguments = () => request("/arguments");
-export const createArgument = (data) => request("/arguments", { method: "POST", body: JSON.stringify(data) });
-export const deleteArgument = (id) => request(`/arguments/${id}`, { method: "DELETE" });
-export const getArgumentsForNode = (id) => request(`/arguments/for-node/${id}`);
+// ── Claims ──────────────────────────────────────────────────────────
+export const getClaims = (name) => request(`${ws(name)}/claims`);
+export const createClaim = (name, data) => post(`${ws(name)}/claims`, data);
+export const updateClaim = (name, id, data) => put(`${ws(name)}/claims/${id}`, data);
+export const deleteClaim = (name, id) => del(`${ws(name)}/claims/${id}`);
 
-// Defeaters
-export const addDefeater = (argId, data) => request(`/arguments/${argId}/defeaters`, { method: "POST", body: JSON.stringify(data) });
-export const updateDefeater = (argId, idx, data) => request(`/arguments/${argId}/defeaters/${idx}`, { method: "PUT", body: JSON.stringify(data) });
+// ── Evidence ────────────────────────────────────────────────────────
+export const getEvidence = (name) => request(`${ws(name)}/evidence`);
+export const createEvidence = (name, data) => post(`${ws(name)}/evidence`, data);
+export const deleteEvidence = (name, id) => del(`${ws(name)}/evidence/${id}`);
 
-// Graph
-export const getGraph = () => request("/graph");
+// ── Arguments ───────────────────────────────────────────────────────
+export const getArguments = (name) => request(`${ws(name)}/arguments`);
+export const createArgument = (name, data) => post(`${ws(name)}/arguments`, data);
+export const deleteArgument = (name, id) => del(`${ws(name)}/arguments/${id}`);
+export const getArgumentsForNode = (name, id) =>
+  request(`${ws(name)}/arguments/for-node/${id}`);
 
-// Analysis
-export const getAtms = () => request("/analysis/atms");
-export const getCoherence = () => request("/analysis/coherence");
-export const getBlindSpots = () => request("/analysis/blind-spots");
-export const getAssumptions = (id) => request(`/analysis/assumptions/${id}`);
-export const getStressTest = (id) => request(`/analysis/stress-test/${id}`);
-export const bayesianUpdate = (data) => request("/analysis/bayesian-update", { method: "POST", body: JSON.stringify(data) });
+// ── Defeaters ───────────────────────────────────────────────────────
+export const addDefeater = (name, argId, data) =>
+  post(`${ws(name)}/arguments/${argId}/defeaters`, data);
+export const updateDefeater = (name, argId, idx, data) =>
+  put(`${ws(name)}/arguments/${argId}/defeaters/${idx}`, data);
 
-// Summary
-export const getTheses = () => request("/summary/theses");
-export const getSummary = (thesisId) => request(`/summary${thesisId ? `?thesis_id=${thesisId}` : ""}`);
+// ── Graph ───────────────────────────────────────────────────────────
+export const getGraph = (name) => request(`${ws(name)}/graph`);
 
-// Auto-generate
-export const generate = (thesis) => request("/generate", { method: "POST", body: JSON.stringify({ thesis }) });
+// ── Analysis ────────────────────────────────────────────────────────
+export const getAtms = (name) => request(`${ws(name)}/analysis/atms`);
+export const getCoherence = (name) => request(`${ws(name)}/analysis/coherence`);
+export const getBlindSpots = (name) => request(`${ws(name)}/analysis/blind-spots`);
+export const getAssumptions = (name, id) => request(`${ws(name)}/analysis/assumptions/${id}`);
+export const getStressTest = (name, id) => request(`${ws(name)}/analysis/stress-test/${id}`);
+export const bayesianUpdate = (name, data) => post(`${ws(name)}/analysis/bayesian-update`, data);
 
-// Enhance thesis
-export const enhanceThesis = (thesisId) => request("/enhance-thesis", { method: "POST", body: JSON.stringify({ thesis_id: thesisId }) });
+// ── Summary / theses / versions ─────────────────────────────────────
+export const getTheses = (name) => request(`${ws(name)}/summary/theses`);
+export const getSummary = (name, thesisId) =>
+  request(`${ws(name)}/summary${thesisId ? `?thesis_id=${thesisId}` : ""}`);
+export const getThesisVersions = (name, id) => request(`${ws(name)}/thesis-versions/${id}`);
+export const getGitLog = (name) => request(`${ws(name)}/git-log`);
 
-// Accept enhanced thesis (creates new version with fresh graph)
-export const acceptEnhancedThesis = (data) => request("/accept-enhanced-thesis", { method: "POST", body: JSON.stringify(data) });
+// ── LLM (async, slow — 30-60s) ──────────────────────────────────────
+export const generate = (name, thesis) => post(`${ws(name)}/generate`, { thesis });
+export const enhanceThesis = (name, thesisId) =>
+  post(`${ws(name)}/enhance-thesis`, { thesis_id: thesisId });
+export const acceptEnhancedThesis = (name, data) =>
+  post(`${ws(name)}/accept-enhanced-thesis`, data);
 
-// Thesis version history
-export const getThesisVersions = (id) => request(`/thesis-versions/${id}`);
+// ── Manual interventions ────────────────────────────────────────────
+export const respondToDefeater = (name, data) =>
+  post(`${ws(name)}/respond-to-defeater`, data);
+export const concedeDefeater = (name, data) =>
+  post(`${ws(name)}/concede-defeater`, data);
+export const addEvidenceToClaim = (name, data) =>
+  post(`${ws(name)}/add-evidence-to-claim`, data);
+export const challengeClaim = (name, data) =>
+  post(`${ws(name)}/challenge-claim`, data);
+export const setConfidence = (name, data) =>
+  post(`${ws(name)}/set-confidence`, data);
+
+// ── Forks ───────────────────────────────────────────────────────────
+export const listBranches = (name) => request(`${ws(name)}/branches`);
+export const fork = (name, forkName) => post(`${ws(name)}/fork`, { fork_name: forkName });
+export const switchBranch = (name, forkName) =>
+  post(`${ws(name)}/switch`, { fork_name: forkName });
+export const compareBranches = (name, other) =>
+  request(`${ws(name)}/compare/${encodeURIComponent(other)}`);
+export const mergeBranches = (name, sourceBranch, mode = "synthesize") =>
+  post(`${ws(name)}/merge`, { source_branch: sourceBranch, mode });

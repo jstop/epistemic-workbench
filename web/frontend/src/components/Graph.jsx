@@ -19,10 +19,17 @@ const ATMS_BORDER = {
   unknown: "#555",
 };
 
+const DEFEATER_CHIP_COLORS = {
+  active: "#f87171",
+  conceded: "#fb923c",
+  answered: "#4ade80",
+  withdrawn: "#666",
+};
+
 const edgeSourceId = (e) => e.source.id || e.source;
 const edgeTargetId = (e) => e.target.id || e.target;
 
-export default function Graph({ nodes, edges, selectedId, highlightIds, onSelectNode }) {
+export default function Graph({ nodes, edges, selectedId, highlightIds, onSelectNode, onSelectDefeater }) {
   const svgRef = useRef(null);
   const simRef = useRef(null);
   const [, setTick] = useState(0);
@@ -191,6 +198,47 @@ export default function Graph({ nodes, edges, selectedId, highlightIds, onSelect
             >
               {node.atms}
             </text>
+            {/* Per-defeater chips below the label */}
+            {(node.defeaters || []).slice(0, 5).map((d, i) => {
+              const color = DEFEATER_CHIP_COLORS[d.status] || "#666";
+              const chipW = 12;
+              const gap = 3;
+              const total = Math.min(node.defeaters.length, 5);
+              const startX = node.x - (total * (chipW + gap) - gap) / 2;
+              const cx = startX + i * (chipW + gap);
+              const cy = node.y + radius + 22;
+              return (
+                <g
+                  key={`${d.argument_id}-${d.index}`}
+                  onClick={(ev) => {
+                    ev.stopPropagation();
+                    if (onSelectDefeater) onSelectDefeater(d);
+                  }}
+                  style={{ cursor: "pointer" }}
+                >
+                  <rect
+                    x={cx} y={cy}
+                    width={chipW} height={6}
+                    rx={1.5}
+                    fill={color}
+                    opacity={d.status === "active" ? 0.95 : 0.7}
+                    stroke={d.status === "active" ? "#fff" : "none"}
+                    strokeWidth={d.status === "active" ? 0.5 : 0}
+                  >
+                    <title>{`[${d.status}] ${d.type}: ${d.description}`}</title>
+                  </rect>
+                </g>
+              );
+            })}
+            {node.defeaters && node.defeaters.length > 5 && (
+              <text
+                x={node.x + 40} y={node.y + radius + 28}
+                fill="#888" fontSize="8" fontFamily="'JetBrains Mono', monospace"
+                style={{ pointerEvents: "none" }}
+              >
+                +{node.defeaters.length - 5}
+              </text>
+            )}
           </g>
         );
       })}

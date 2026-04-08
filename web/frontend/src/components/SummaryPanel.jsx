@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import * as api from "../api.js";
 
-export default function SummaryPanel({ onThesisChange, activeThesisId }) {
+export default function SummaryPanel({ workspace, onThesisChange, activeThesisId }) {
   const [summary, setSummary] = useState(null);
   const [theses, setTheses] = useState([]);
   const [selectedThesis, setSelectedThesis] = useState(null);
@@ -13,18 +13,26 @@ export default function SummaryPanel({ onThesisChange, activeThesisId }) {
   const [accepting, setAccepting] = useState(false);
 
   const fetchTheses = () => {
-    api.getTheses().then(setTheses).catch(() => setTheses([]));
+    if (!workspace) return;
+    api.getTheses(workspace).then(setTheses).catch(() => setTheses([]));
   };
 
   const fetch = (thesisId) => {
+    if (!workspace) return;
     setLoading(true);
-    api.getSummary(thesisId || selectedThesis)
+    api.getSummary(workspace, thesisId || selectedThesis)
       .then(setSummary)
       .catch(() => setSummary(null))
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { fetchTheses(); fetch(); }, []);
+  useEffect(() => {
+    if (workspace) {
+      fetchTheses();
+      fetch();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspace]);
 
   // Re-fetch when parent's activeThesisId changes (e.g. version navigation in header)
   useEffect(() => {
@@ -34,6 +42,7 @@ export default function SummaryPanel({ onThesisChange, activeThesisId }) {
       setEnhanceError(null);
       fetch(activeThesisId);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeThesisId]);
 
   const handleSelectThesis = (id) => {
@@ -64,11 +73,11 @@ export default function SummaryPanel({ onThesisChange, activeThesisId }) {
 
   const handleEnhance = async () => {
     const thesisId = summary?.thesis?.id;
-    if (!thesisId || enhancing) return;
+    if (!workspace || !thesisId || enhancing) return;
     setEnhancing(true);
     setEnhanceError(null);
     try {
-      const result = await api.enhanceThesis(thesisId);
+      const result = await api.enhanceThesis(workspace, thesisId);
       setEnhanced(result);
     } catch (err) {
       console.error("Enhance error:", err);
@@ -80,10 +89,10 @@ export default function SummaryPanel({ onThesisChange, activeThesisId }) {
 
   const handleAcceptEnhanced = async () => {
     const thesisId = summary?.thesis?.id;
-    if (!thesisId || !enhanced?.enhanced_thesis || accepting) return;
+    if (!workspace || !thesisId || !enhanced?.enhanced_thesis || accepting) return;
     setAccepting(true);
     try {
-      const result = await api.acceptEnhancedThesis({
+      const result = await api.acceptEnhancedThesis(workspace, {
         thesis_id: thesisId,
         enhanced_thesis: enhanced.enhanced_thesis,
         rationale: enhanced.rationale || "",
@@ -101,6 +110,10 @@ export default function SummaryPanel({ onThesisChange, activeThesisId }) {
       setAccepting(false);
     }
   };
+
+  if (!workspace) {
+    return <div style={{ color: "#555", fontSize: "10px" }}>Select a workspace first.</div>;
+  }
 
   if (loading) {
     return <div style={{ color: "#444", fontSize: "11px", textAlign: "center", marginTop: "40px" }}>Loading…</div>;

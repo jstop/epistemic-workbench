@@ -61,7 +61,7 @@ function SubmitButton({ onClick, disabled, children }) {
   );
 }
 
-export default function AddPanel({ graphNodes, onAdded }) {
+export default function AddPanel({ workspace, graphNodes, onAdded }) {
   const [mode, setMode] = useState("claim");
 
   // Claim form
@@ -87,25 +87,29 @@ export default function AddPanel({ graphNodes, onAdded }) {
   const [argConfidence, setArgConfidence] = useState(0.7);
 
   const addClaim = async () => {
-    if (!subject.trim() || !predicate.trim() || !object.trim()) return;
-    await api.createClaim({ subject, predicate, object, confidence, modality, notes });
+    if (!workspace || !subject.trim() || !predicate.trim() || !object.trim()) return;
+    await api.createClaim(workspace, { subject, predicate, object, confidence, modality, notes });
     setSubject(""); setPredicate(""); setObject(""); setNotes(""); setConfidence(0.7);
     onAdded();
   };
 
   const addEvidence = async () => {
-    if (!evTitle.trim() || !evDesc.trim()) return;
-    await api.createEvidence({ title: evTitle, description: evDesc, evidence_type: evType, source: evSource, reliability: evReliability });
+    if (!workspace || !evTitle.trim() || !evDesc.trim()) return;
+    await api.createEvidence(workspace, { title: evTitle, description: evDesc, evidence_type: evType, source: evSource, reliability: evReliability });
     setEvTitle(""); setEvDesc(""); setEvSource(""); setEvReliability(0.7);
     onAdded();
   };
 
   const addArgument = async () => {
-    if (!argConclusion || argPremises.length === 0) return;
-    await api.createArgument({ conclusion: argConclusion, premises: argPremises, pattern: argPattern, label: argLabel, confidence: argConfidence });
+    if (!workspace || !argConclusion || argPremises.length === 0) return;
+    await api.createArgument(workspace, { conclusion: argConclusion, premises: argPremises, pattern: argPattern, label: argLabel, confidence: argConfidence });
     setArgLabel(""); setArgPremises([]); setArgConfidence(0.7);
     onAdded();
   };
+
+  if (!workspace) {
+    return <div style={{ color: "#555", fontSize: "10px" }}>Select a workspace first.</div>;
+  }
 
   const togglePremise = (id) => {
     setArgPremises((prev) => prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]);
