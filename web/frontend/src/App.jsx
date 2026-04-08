@@ -25,7 +25,7 @@ export default function App() {
   const [fullGraph, setFullGraph] = useState({ nodes: [], edges: [] });
   const [selectedId, setSelectedId] = useState(null);
   const [highlightIds, setHighlightIds] = useState([]);
-  const [panel, setPanel] = useState("inspect");
+  const [panel, setPanel] = useState("summary");
   const [analysisKey, setAnalysisKey] = useState(0);
 
   // Thesis selection (for workspaces with multiple thesis lineages)
@@ -105,7 +105,7 @@ export default function App() {
     setCurrentWorkspace(name);
     setSelectedId(null);
     setActiveThesisId(null);
-    setPanel("inspect");
+    setPanel("summary");
   }, []);
 
   const handleSelectNode = (id) => {
@@ -306,137 +306,177 @@ export default function App() {
           onRefresh={refreshWorkspaceList}
         />
 
-        {/* Graph canvas */}
-        <div style={{ flex: 1, position: "relative", minWidth: 0 }}>
-          {currentWorkspace && fullGraph.nodes.length > 0 ? (
-            <Graph
-              nodes={graph.nodes}
-              edges={graph.edges}
-              selectedId={selectedId}
-              highlightIds={highlightIds}
-              onSelectNode={handleSelectNode}
-              onSelectDefeater={handleSelectDefeater}
-            />
-          ) : (
-            <div style={{
-              height: "100%", display: "flex", alignItems: "center", justifyContent: "center",
-              flexDirection: "column", gap: "12px",
-            }}>
-              {!currentWorkspace ? (
-                <>
-                  <div style={{ color: "#444", fontSize: "11px" }}>No workspace selected</div>
-                  <button
-                    onClick={() => setShowNewWorkspace(true)}
-                    style={{
-                      background: "#FF6B3522", border: "1px solid #FF6B35",
-                      color: "#FF6B35", padding: "8px 16px", fontSize: "10px",
-                      cursor: "pointer", fontFamily: "'JetBrains Mono', monospace",
-                      letterSpacing: "1px", borderRadius: "3px",
-                    }}
-                  >
-                    + NEW WORKSPACE
-                  </button>
-                </>
-              ) : (
-                <div style={{ color: "#444", fontSize: "11px" }}>Empty workspace</div>
-              )}
-            </div>
-          )}
-
-          {fullGraph.nodes.length > 0 && (
-            <div style={{
-              position: "absolute", bottom: "12px", left: "12px",
-              background: "#141414", border: "1px solid #222", borderRadius: "4px",
-              padding: "8px 12px", display: "flex", gap: "16px", alignItems: "center",
-            }}>
-              <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
-                <span style={{ color: "#60a5fa", fontSize: "12px" }}>●</span>
-                <span style={{ fontSize: "9px", color: "#555" }}>Claim</span>
-              </div>
-              <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
-                <span style={{ color: "#4ade80", fontSize: "12px" }}>■</span>
-                <span style={{ fontSize: "9px", color: "#555" }}>Evidence</span>
-              </div>
-              <div style={{ fontSize: "9px", color: "#333" }}>|</div>
-              <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
-                <span style={{ fontSize: "9px", color: "#4ade80" }}>accepted</span>
-                <span style={{ fontSize: "9px", color: "#fbbf24" }}>provisional</span>
-                <span style={{ fontSize: "9px", color: "#f87171" }}>defeated</span>
-              </div>
-              <div style={{ fontSize: "9px", color: "#333" }}>|</div>
-              <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
-                <span style={{ fontSize: "9px", color: "#888" }}>defeater:</span>
-                <span style={{ fontSize: "9px", color: "#f87171" }}>active</span>
-                <span style={{ fontSize: "9px", color: "#fb923c" }}>conceded</span>
-                <span style={{ fontSize: "9px", color: "#4ade80" }}>answered</span>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Right panel */}
-        <div style={{
-          width: "380px", borderLeft: "1px solid #1a1a1a", display: "flex",
-          flexDirection: "column", flexShrink: 0, overflow: "hidden",
-        }}>
+        {/* Main pane: tabbed (Summary default) */}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
+          {/* Tab bar */}
           <div style={{ display: "flex", borderBottom: "1px solid #1a1a1a", flexShrink: 0 }}>
             {[
-              { key: "inspect", label: "Inspect" },
+              { key: "summary", label: "Summary" },
+              { key: "graph", label: "Graph" },
+              { key: "inspect", label: selectedNode ? `Inspect: ${selectedNode.label.slice(0, 30)}${selectedNode.label.length > 30 ? "…" : ""}` : "Inspect" },
               { key: "add", label: "Add" },
               { key: "analysis", label: "Analysis" },
-              { key: "summary", label: "Summary" },
             ].map((tab) => (
               <button
                 key={tab.key}
                 onClick={() => setPanel(tab.key)}
                 style={{
-                  flex: 1, background: panel === tab.key ? "#141414" : "transparent",
-                  border: "none", borderBottom: panel === tab.key ? "2px solid #FF6B35" : "2px solid transparent",
-                  color: panel === tab.key ? "#FF6B35" : "#555", padding: "10px 0",
-                  fontSize: "10px", cursor: "pointer", fontFamily: "'JetBrains Mono', monospace",
+                  flex: tab.key === "inspect" && selectedNode ? 2 : 1,
+                  background: panel === tab.key ? "#141414" : "transparent",
+                  border: "none",
+                  borderBottom: panel === tab.key ? "2px solid #FF6B35" : "2px solid transparent",
+                  color: panel === tab.key ? "#FF6B35" : "#555",
+                  padding: "12px 8px",
+                  fontSize: "10px", cursor: "pointer",
+                  fontFamily: "'JetBrains Mono', monospace",
                   letterSpacing: "1px", textTransform: "uppercase",
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  minWidth: 0,
                 }}
+                title={tab.label}
               >
                 {tab.label}
               </button>
             ))}
           </div>
 
-          <div style={{ flex: 1, overflow: "auto", padding: "14px" }}>
-            {panel === "inspect" && (
-              <InspectPanel
-                workspace={currentWorkspace}
-                node={selectedNode}
-                edges={graph.edges}
-                allNodes={graph.nodes}
-                onUpdated={handleUpdated}
-                onSelectNode={handleSelectNode}
-              />
-            )}
-            {panel === "add" && (
-              <AddPanel
-                workspace={currentWorkspace}
-                graphNodes={graph.nodes}
-                onAdded={handleUpdated}
-              />
-            )}
-            {panel === "analysis" && (
-              <AnalysisPanel
-                key={analysisKey}
-                workspace={currentWorkspace}
-                selectedId={selectedId}
-                onSelectNode={handleSelectNode}
-                onHighlight={setHighlightIds}
-              />
-            )}
-            <div style={{ display: panel === "summary" ? "block" : "none" }}>
-              <SummaryPanel
-                workspace={currentWorkspace}
-                activeThesisId={activeThesisId}
-                onThesisChange={(id) => { setActiveThesisId(id); handleUpdated(); }}
-              />
+          {/* Tab content */}
+          {!currentWorkspace ? (
+            <div style={{
+              flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
+              flexDirection: "column", gap: "12px",
+            }}>
+              <div style={{ color: "#444", fontSize: "11px" }}>No workspace selected</div>
+              <button
+                onClick={() => setShowNewWorkspace(true)}
+                style={{
+                  background: "#FF6B3522", border: "1px solid #FF6B35",
+                  color: "#FF6B35", padding: "8px 16px", fontSize: "10px",
+                  cursor: "pointer", fontFamily: "'JetBrains Mono', monospace",
+                  letterSpacing: "1px", borderRadius: "3px",
+                }}
+              >
+                + NEW WORKSPACE
+              </button>
             </div>
-          </div>
+          ) : (
+            <>
+              {/* Summary — always mounted to preserve scroll/state */}
+              <div style={{
+                flex: 1, overflow: "auto",
+                padding: "20px 28px",
+                display: panel === "summary" ? "block" : "none",
+              }}>
+                <SummaryPanel
+                  workspace={currentWorkspace}
+                  activeThesisId={activeThesisId}
+                  onThesisChange={(id) => { setActiveThesisId(id); handleUpdated(); }}
+                  onSelectNode={handleSelectNode}
+                  onUpdated={handleUpdated}
+                />
+              </div>
+
+              {/* Graph — also always mounted (the d3 force sim is expensive to restart) */}
+              <div style={{
+                flex: 1, position: "relative", minWidth: 0,
+                display: panel === "graph" ? "block" : "none",
+              }}>
+                {fullGraph.nodes.length > 0 ? (
+                  <Graph
+                    nodes={graph.nodes}
+                    edges={graph.edges}
+                    selectedId={selectedId}
+                    highlightIds={highlightIds}
+                    onSelectNode={handleSelectNode}
+                    onSelectDefeater={handleSelectDefeater}
+                  />
+                ) : (
+                  <div style={{
+                    height: "100%", display: "flex", alignItems: "center",
+                    justifyContent: "center", color: "#444", fontSize: "11px",
+                  }}>
+                    Empty workspace
+                  </div>
+                )}
+                {fullGraph.nodes.length > 0 && (
+                  <div style={{
+                    position: "absolute", bottom: "12px", left: "12px",
+                    background: "#141414", border: "1px solid #222", borderRadius: "4px",
+                    padding: "8px 12px", display: "flex", gap: "16px", alignItems: "center",
+                  }}>
+                    <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                      <span style={{ color: "#60a5fa", fontSize: "12px" }}>●</span>
+                      <span style={{ fontSize: "9px", color: "#555" }}>Claim</span>
+                    </div>
+                    <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                      <span style={{ color: "#4ade80", fontSize: "12px" }}>■</span>
+                      <span style={{ fontSize: "9px", color: "#555" }}>Evidence</span>
+                    </div>
+                    <div style={{ fontSize: "9px", color: "#333" }}>|</div>
+                    <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                      <span style={{ fontSize: "9px", color: "#4ade80" }}>accepted</span>
+                      <span style={{ fontSize: "9px", color: "#fbbf24" }}>provisional</span>
+                      <span style={{ fontSize: "9px", color: "#f87171" }}>defeated</span>
+                    </div>
+                    <div style={{ fontSize: "9px", color: "#333" }}>|</div>
+                    <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
+                      <span style={{ fontSize: "9px", color: "#888" }}>defeater:</span>
+                      <span style={{ fontSize: "9px", color: "#f87171" }}>active</span>
+                      <span style={{ fontSize: "9px", color: "#fb923c" }}>conceded</span>
+                      <span style={{ fontSize: "9px", color: "#4ade80" }}>answered</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Inspect */}
+              <div style={{
+                flex: 1, overflow: "auto",
+                padding: "20px 28px",
+                display: panel === "inspect" ? "block" : "none",
+              }}>
+                <InspectPanel
+                  workspace={currentWorkspace}
+                  node={selectedNode}
+                  edges={graph.edges}
+                  allNodes={graph.nodes}
+                  onUpdated={handleUpdated}
+                  onSelectNode={handleSelectNode}
+                />
+              </div>
+
+              {/* Add */}
+              <div style={{
+                flex: 1, overflow: "auto",
+                padding: "20px 28px",
+                display: panel === "add" ? "block" : "none",
+                maxWidth: "560px",
+              }}>
+                <AddPanel
+                  workspace={currentWorkspace}
+                  graphNodes={graph.nodes}
+                  onAdded={handleUpdated}
+                />
+              </div>
+
+              {/* Analysis */}
+              <div style={{
+                flex: 1, overflow: "auto",
+                padding: "20px 28px",
+                display: panel === "analysis" ? "block" : "none",
+              }}>
+                <AnalysisPanel
+                  key={analysisKey}
+                  workspace={currentWorkspace}
+                  selectedId={selectedId}
+                  onSelectNode={handleSelectNode}
+                  onHighlight={setHighlightIds}
+                />
+              </div>
+            </>
+          )}
         </div>
       </div>
 

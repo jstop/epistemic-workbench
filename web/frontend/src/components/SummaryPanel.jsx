@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import * as api from "../api.js";
 
-export default function SummaryPanel({ workspace, onThesisChange, activeThesisId }) {
+export default function SummaryPanel({ workspace, onThesisChange, activeThesisId, onSelectNode, onUpdated }) {
   const [summary, setSummary] = useState(null);
   const [theses, setTheses] = useState([]);
   const [selectedThesis, setSelectedThesis] = useState(null);
@@ -87,6 +87,41 @@ export default function SummaryPanel({ workspace, onThesisChange, activeThesisId
     }
   };
 
+  const refreshAfterAction = () => {
+    if (onUpdated) onUpdated();
+    fetch();
+  };
+
+  const handleRespond = async (d) => {
+    const response = prompt("Response (rebuts the defeater):");
+    if (response === null) return;
+    try {
+      await api.respondToDefeater(workspace, {
+        argument_id: d.argument_id,
+        response,
+        defeater_index: d.index,
+      });
+      refreshAfterAction();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const handleConcede = async (d) => {
+    const note = prompt("Concede this defeater (accept it as valid). What part of your thesis are you conceding?");
+    if (note === null) return;
+    try {
+      await api.concedeDefeater(workspace, {
+        argument_id: d.argument_id,
+        note,
+        defeater_index: d.index,
+      });
+      refreshAfterAction();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
   const handleAcceptEnhanced = async () => {
     const thesisId = summary?.thesis?.id;
     if (!workspace || !thesisId || !enhanced?.enhanced_thesis || accepting) return;
@@ -127,6 +162,7 @@ export default function SummaryPanel({ workspace, onThesisChange, activeThesisId
   const atmsColor = thesis.atms_status === "accepted" ? "#4ade80" : thesis.atms_status === "defeated" ? "#f87171" : "#fbbf24";
   const assessment = summary.confidence_assessment;
   const activeDefeaters = summary.objections.filter((d) => d.status === "active");
+  const concededDefeaters = summary.objections.filter((d) => d.status === "conceded");
   const answeredDefeaters = summary.objections.filter((d) => d.status === "answered");
   const coherenceIssues = summary.unresolved_issues?.coherence || [];
   const blindSpots = summary.unresolved_issues?.blind_spots || [];
@@ -136,6 +172,19 @@ export default function SummaryPanel({ workspace, onThesisChange, activeThesisId
     scope: "#60a5fa", precision: "#a78bfa", qualifier: "#fbbf24",
     strength: "#4ade80", acknowledgment: "#f97316",
   };
+
+  const linkBtnStyle = (color) => ({
+    background: `${color}18`,
+    border: `1px solid ${color}66`,
+    color,
+    borderRadius: "3px",
+    padding: "3px 8px",
+    fontSize: "9px",
+    cursor: "pointer",
+    fontFamily: "'JetBrains Mono', monospace",
+    letterSpacing: "1px",
+    textTransform: "uppercase",
+  });
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
@@ -218,16 +267,32 @@ export default function SummaryPanel({ workspace, onThesisChange, activeThesisId
       )}
 
       {/* Thesis */}
-      <div style={{ background: "#141414", borderRadius: "4px", padding: "12px", borderLeft: "3px solid #FF6B35" }}>
-        <div style={{ fontSize: "9px", color: "#FF6B35", letterSpacing: "1px", textTransform: "uppercase", marginBottom: "6px" }}>
-          Thesis
+      <div style={{ background: "#141414", borderRadius: "4px", padding: "14px", borderLeft: "3px solid #FF6B35" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+          <div style={{ fontSize: "9px", color: "#FF6B35", letterSpacing: "1px", textTransform: "uppercase" }}>
+            Thesis
+          </div>
+          {onSelectNode && thesis.id && (
+            <button
+              onClick={() => onSelectNode(thesis.id)}
+              style={linkBtnStyle("#888")}
+            >
+              Inspect
+            </button>
+          )}
         </div>
-        <div style={{ fontSize: "12px", color: "#e0e0e0", lineHeight: "1.5", marginBottom: "6px" }}>
+        <div
+          onClick={() => onSelectNode && thesis.id && onSelectNode(thesis.id)}
+          style={{
+            fontSize: "13px", color: "#e0e0e0", lineHeight: "1.6", marginBottom: "8px",
+            cursor: onSelectNode ? "pointer" : "default",
+          }}
+        >
           {thesis.notes || thesis.label}
         </div>
         <div style={{ display: "flex", gap: "12px", fontSize: "10px" }}>
           <span style={{ color: "#888" }}>Confidence: <span style={{ color: "#FF6B35" }}>{(thesis.confidence * 100).toFixed(0)}%</span></span>
-          <span style={{ color: atmsColor }}>{thesis.atms_status}</span>
+          <span style={{ color: atmsColor, textTransform: "uppercase" }}>{thesis.atms_status}</span>
         </div>
       </div>
 
@@ -287,13 +352,24 @@ export default function SummaryPanel({ workspace, onThesisChange, activeThesisId
             Supporting Arguments
           </div>
           {summary.supporting_arguments.map((arg, i) => (
-            <div key={i} style={{ background: "#141414", borderRadius: "4px", padding: "10px", marginBottom: "6px" }}>
-              <div style={{ fontSize: "11px", color: "#e0e0e0", marginBottom: "4px" }}>{arg.label}</div>
-              <div style={{ fontSize: "9px", color: "#555", marginBottom: "6px" }}>
+            <div key={i} style={{ background: "#141414", borderRadius: "4px", padding: "12px", marginBottom: "8px" }}>
+              <div style={{ fontSize: "12px", color: "#e0e0e0", marginBottom: "4px", lineHeight: "1.4" }}>
+                {arg.label}
+              </div>
+              <div style={{ fontSize: "9px", color: "#555", marginBottom: "8px", letterSpacing: "1px", textTransform: "uppercase" }}>
                 {arg.pattern} · {(arg.confidence * 100).toFixed(0)}%
               </div>
               {arg.premises.map((p, j) => (
-                <div key={j} style={{ fontSize: "10px", color: "#888", paddingLeft: "8px", borderLeft: "2px solid #222", marginBottom: "3px" }}>
+                <div
+                  key={j}
+                  onClick={() => p.id && onSelectNode && onSelectNode(p.id)}
+                  style={{
+                    fontSize: "11px", color: "#aaa",
+                    paddingLeft: "10px", borderLeft: "2px solid #222",
+                    marginBottom: "4px", lineHeight: "1.5",
+                    cursor: p.id && onSelectNode ? "pointer" : "default",
+                  }}
+                >
                   <span style={{ color: p.type === "evidence" ? "#4ade80" : "#60a5fa" }}>
                     {p.type === "evidence" ? "■" : "●"}
                   </span>{" "}
@@ -307,29 +383,71 @@ export default function SummaryPanel({ workspace, onThesisChange, activeThesisId
       )}
 
       {/* Objections */}
-      {(activeDefeaters.length > 0 || answeredDefeaters.length > 0) && (
+      {(activeDefeaters.length > 0 || concededDefeaters.length > 0 || answeredDefeaters.length > 0) && (
         <div>
           <div style={{ fontSize: "9px", color: "#555", letterSpacing: "1px", textTransform: "uppercase", marginBottom: "6px" }}>
-            Known Objections
+            Known Objections ({activeDefeaters.length + concededDefeaters.length + answeredDefeaters.length})
           </div>
           {activeDefeaters.map((d, i) => (
             <div key={`a-${i}`} style={{
-              background: "#141414", borderRadius: "4px", padding: "8px",
-              borderLeft: "3px solid #f87171", marginBottom: "4px",
+              background: "#141414", borderRadius: "4px", padding: "10px",
+              borderLeft: "3px solid #f87171", marginBottom: "6px",
             }}>
-              <div style={{ fontSize: "9px", color: "#f87171", marginBottom: "3px" }}>UNRESOLVED · {d.type}</div>
-              <div style={{ fontSize: "10px", color: "#ccc", lineHeight: "1.4" }}>{d.description}</div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+                <span style={{ fontSize: "9px", color: "#f87171", letterSpacing: "1px", textTransform: "uppercase" }}>
+                  Unresolved · {d.type}
+                </span>
+                <div style={{ display: "flex", gap: "4px" }}>
+                  <button onClick={() => handleRespond(d)} style={linkBtnStyle("#4ade80")}>
+                    Rebut
+                  </button>
+                  <button onClick={() => handleConcede(d)} style={linkBtnStyle("#fb923c")}>
+                    Concede
+                  </button>
+                </div>
+              </div>
+              <div style={{ fontSize: "11px", color: "#ccc", lineHeight: "1.5", marginBottom: "4px" }}>
+                {d.description}
+              </div>
+              <div style={{ fontSize: "9px", color: "#555" }}>
+                on: {d.argument_label}
+              </div>
+            </div>
+          ))}
+          {concededDefeaters.map((d, i) => (
+            <div key={`c-${i}`} style={{
+              background: "#141414", borderRadius: "4px", padding: "10px",
+              borderLeft: "3px solid #fb923c", marginBottom: "6px",
+            }}>
+              <div style={{ fontSize: "9px", color: "#fb923c", marginBottom: "4px", letterSpacing: "1px", textTransform: "uppercase" }}>
+                Conceded · {d.type}
+              </div>
+              <div style={{ fontSize: "11px", color: "#ccc", lineHeight: "1.5" }}>
+                {d.description}
+              </div>
+              {d.response && (
+                <div style={{ fontSize: "10px", color: "#fb923c", marginTop: "4px", paddingLeft: "8px", borderLeft: "2px solid #333", lineHeight: "1.5" }}>
+                  Conceded: {d.response}
+                </div>
+              )}
+              <div style={{ fontSize: "9px", color: "#555", marginTop: "4px" }}>
+                on: {d.argument_label}
+              </div>
             </div>
           ))}
           {answeredDefeaters.map((d, i) => (
             <div key={`r-${i}`} style={{
-              background: "#141414", borderRadius: "4px", padding: "8px",
-              borderLeft: "3px solid #4ade80", marginBottom: "4px",
+              background: "#141414", borderRadius: "4px", padding: "10px",
+              borderLeft: "3px solid #4ade80", marginBottom: "6px",
             }}>
-              <div style={{ fontSize: "9px", color: "#4ade80", marginBottom: "3px" }}>ANSWERED · {d.type}</div>
-              <div style={{ fontSize: "10px", color: "#666", lineHeight: "1.4", textDecoration: "line-through" }}>{d.description}</div>
+              <div style={{ fontSize: "9px", color: "#4ade80", marginBottom: "4px", letterSpacing: "1px", textTransform: "uppercase" }}>
+                Answered · {d.type}
+              </div>
+              <div style={{ fontSize: "11px", color: "#666", lineHeight: "1.5", textDecoration: "line-through" }}>
+                {d.description}
+              </div>
               {d.response && (
-                <div style={{ fontSize: "10px", color: "#888", marginTop: "3px", paddingLeft: "8px", borderLeft: "2px solid #333" }}>
+                <div style={{ fontSize: "10px", color: "#4ade80", marginTop: "4px", paddingLeft: "8px", borderLeft: "2px solid #333", lineHeight: "1.5" }}>
                   {d.response}
                 </div>
               )}
@@ -342,14 +460,23 @@ export default function SummaryPanel({ workspace, onThesisChange, activeThesisId
       {assumptions.length > 0 && (
         <div>
           <div style={{ fontSize: "9px", color: "#555", letterSpacing: "1px", textTransform: "uppercase", marginBottom: "6px" }}>
-            Assumptions
+            Assumptions ({assumptions.length})
           </div>
           {assumptions.map((a, i) => (
-            <div key={i} style={{ display: "flex", gap: "6px", alignItems: "baseline", marginBottom: "3px" }}>
+            <div
+              key={i}
+              onClick={() => a.id && onSelectNode && onSelectNode(a.id)}
+              style={{
+                display: "flex", gap: "8px", alignItems: "baseline",
+                padding: "6px 8px", marginBottom: "3px",
+                background: "#141414", borderRadius: "3px",
+                cursor: a.id && onSelectNode ? "pointer" : "default",
+              }}
+            >
               <span style={{ fontSize: "10px" }}>{a.type === "explicit" ? "📌" : "👁"}</span>
-              <span style={{ fontSize: "10px", color: "#888", flex: 1 }}>{a.label}</span>
-              <span style={{ fontSize: "9px", color: a.supported ? "#4ade80" : "#f87171" }}>
-                {a.supported ? "✓" : "!"}
+              <span style={{ fontSize: "11px", color: "#aaa", flex: 1, lineHeight: "1.4" }}>{a.label}</span>
+              <span style={{ fontSize: "9px", color: a.supported ? "#4ade80" : "#f87171", flexShrink: 0 }}>
+                {a.supported ? "supported" : "UNSUPPORTED"}
               </span>
             </div>
           ))}

@@ -344,20 +344,23 @@ def compute_summary(store, thesis_id=None) -> dict:
                 p = store.get(pid)
                 if p:
                     premises.append({
+                        "id": pid,
                         "type": type(p).__name__.lower(),
                         "label": f"{p.subject} {p.predicate} {p.object}" if hasattr(p, "subject") else getattr(p, "title", pid[:12]),
                         "confidence": p.confidence.level if hasattr(p, "confidence") else getattr(p, "reliability", None),
                         "notes": getattr(p, "notes", "") or getattr(p, "description", ""),
                     })
             supporting.append({
+                "id": aid,
                 "label": a.label or "(unlabeled)",
                 "pattern": a.pattern.value,
                 "confidence": a.confidence.level,
                 "premises": premises,
                 "defeaters": [
-                    {"type": d.type.value, "description": d.description,
+                    {"argument_id": aid, "index": i,
+                     "type": d.type.value, "description": d.description,
                      "status": d.status.value, "response": d.response}
-                    for d in a.defeaters
+                    for i, d in enumerate(a.defeaters)
                 ],
             })
 
@@ -365,8 +368,10 @@ def compute_summary(store, thesis_id=None) -> dict:
     all_defeaters = []
     for aid in subgraph_args:
         a = store.arguments[aid]
-        for d in a.defeaters:
+        for i, d in enumerate(a.defeaters):
             all_defeaters.append({
+                "argument_id": aid,
+                "index": i,
                 "type": d.type.value,
                 "description": d.description,
                 "status": d.status.value,
