@@ -36,21 +36,18 @@ from epist.llm import (
 )
 
 
-# ── API key ──────────────────────────────────────────────────────────
+# ── Subscription auth ────────────────────────────────────────────────
 
-def _ensure_api_key():
-    """Load API key from ~/.api_keys/env if not already set."""
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        api_keys_file = Path.home() / ".api_keys" / "env"
-        if api_keys_file.exists():
-            for line in api_keys_file.read_text().splitlines():
-                line = line.strip()
-                if line.startswith("ANTHROPIC_API_KEY="):
-                    val = line.split("=", 1)[1].strip().strip("'\"")
-                    os.environ["ANTHROPIC_API_KEY"] = val
-                    break
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        raise RuntimeError("ANTHROPIC_API_KEY not set. Set it in env or ~/.api_keys/env")
+def _use_subscription_auth():
+    """Ensure the Agent SDK routes through Claude Code's subscription auth,
+    not the API key. If ANTHROPIC_API_KEY is set in the environment, Claude
+    Code will prefer it over the user's logged-in subscription, which means
+    calls bill against the API balance instead of the subscription.
+
+    We unset it here so generate/enhance/synthesize all bill against the
+    subscription that Claude Code is logged into.
+    """
+    os.environ.pop("ANTHROPIC_API_KEY", None)
 
 
 # ── MCP tools for graph building ─────────────────────────────────────
@@ -225,7 +222,7 @@ Guidelines:
 
 async def _generate_full_graph_async(store, thesis_text: str, on_tool_call=None) -> str:
     """Async implementation using Agent SDK with custom tools."""
-    _ensure_api_key()
+    _use_subscription_auth()
     write_thesis_md(store, thesis_text)
 
     tools = _make_generate_tools(store)
@@ -337,6 +334,7 @@ async def _enhance_thesis_async(store, thesis_id: str) -> dict:
     """
     from claude_agent_sdk import query, ClaudeAgentOptions, ResultMessage
 
+    _use_subscription_auth()
     summary = compute_summary(store, thesis_id)
     if not summary or not summary.get("thesis"):
         raise RuntimeError("Thesis not found")
@@ -460,6 +458,7 @@ async def _synthesize_thesis_async(label_a: str, store_a, label_b: str, store_b)
     from claude_agent_sdk import query, ClaudeAgentOptions, ResultMessage
     from epist.compare import compute_graph_diff, compute_analysis_delta, format_diff_markdown
 
+    _use_subscription_auth()
     summary_a = compute_summary(store_a)
     summary_b = compute_summary(store_b)
     if not summary_a.get("thesis") or not summary_b.get("thesis"):
