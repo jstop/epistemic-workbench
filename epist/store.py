@@ -232,14 +232,18 @@ class Store:
 
     # ── Git operations ───────────────────────────────────────────────
 
-    def _git(self, *args, check=True):
+    def _git(self, *args, check=True, timeout=30):
         """Run a git command in the workspace directory."""
-        result = subprocess.run(
-            ["git"] + list(args),
-            cwd=self.home,
-            capture_output=True,
-            text=True,
-        )
+        try:
+            result = subprocess.run(
+                ["git"] + list(args),
+                cwd=self.home,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"git {args[0]} timed out after {timeout}s")
         if check and result.returncode != 0:
             raise RuntimeError(f"git {args[0]} failed: {result.stderr.strip()}")
         return result
