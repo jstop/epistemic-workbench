@@ -4,10 +4,14 @@ All objects stored in a single workspace directory.
 Each workspace can optionally be a git repo for version tracking.
 """
 import json
+import logging
 import os
 import subprocess
+import time
 from pathlib import Path
 from dataclasses import asdict
+
+logger = logging.getLogger("epist.store")
 from .model import (
     Claim, Evidence, Argument, Evaluation, Prediction,
     Confidence, Scope, Identity, Defeater,
@@ -234,6 +238,9 @@ class Store:
 
     def _git(self, *args, check=True, timeout=30):
         """Run a git command in the workspace directory."""
+        cmd_str = f"git {' '.join(str(a) for a in args)}"
+        logger.debug(f"git: {cmd_str} (cwd={self.home.name})")
+        start = time.time()
         try:
             result = subprocess.run(
                 ["git"] + list(args),
@@ -243,9 +250,18 @@ class Store:
                 timeout=timeout,
             )
         except subprocess.TimeoutExpired:
+            elapsed = time.time() - start
+            logger.error(f"git: TIMEOUT after {elapsed:.1f}s: {cmd_str}")
             raise RuntimeError(f"git {args[0]} timed out after {timeout}s")
-        if check and result.returncode != 0:
-            raise RuntimeError(f"git {args[0]} failed: {result.stderr.strip()}")
+        elapsed = time.time() - start
+        if result.returncode != 0:
+            logger.debug(f"git: rc={result.returncode} {elapsed:.1f}s: {cmd_str}: {result.stderr.strip()[:200]}")
+            if check:
+                raise RuntimeError(f"git {args[0]} failed: {result.stderr.strip()}")
+        elif elapsed > 2.0:
+            logger.warning(f"git: SLOW {elapsed:.1f}s: {cmd_str}")
+        else:
+            logger.debug(f"git: ok {elapsed:.1f}s: {cmd_str}")
         return result
 
     def is_git_repo(self) -> bool:

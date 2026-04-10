@@ -1,10 +1,17 @@
 """
 MCP server for the Epistemic Workbench.
 Exposes thesis generation, analysis, and enhancement as tools for Claude Desktop.
+
+Logging: all output goes to stderr (stdout is the JSON-RPC channel).
+Log file: ~/EPISTEMIC_TOOLS/workspaces/.mcp-server.log (if writable).
 """
 import json
+import logging
 import os
 import sys
+import time
+import traceback
+from functools import wraps
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
@@ -25,12 +32,86 @@ from epist.agent import (
     write_thesis_md,
 )
 
+# ── Logging ──────────────────────────────────────────────────────────
+
+LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
+LOG_DATE = "%Y-%m-%d %H:%M:%S"
+
+logger = logging.getLogger("epist.mcp")
+logger.setLevel(logging.DEBUG)
+
+# Always log to stderr (safe for stdio MCP servers)
+_stderr_handler = logging.StreamHandler(sys.stderr)
+_stderr_handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=LOG_DATE))
+_stderr_handler.setLevel(logging.INFO)
+logger.addHandler(_stderr_handler)
+
+# Also log to a file if the workspaces dir is writable
+_log_dir = Path(os.environ.get(
+    "EPIST_WORKSPACES",
+    Path.home() / "EPISTEMIC_TOOLS" / "workspaces",
+))
+try:
+    _log_dir.mkdir(parents=True, exist_ok=True)
+    _log_file = _log_dir / ".mcp-server.log"
+    _file_handler = logging.FileHandler(str(_log_file))
+    _file_handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=LOG_DATE))
+    _file_handler.setLevel(logging.DEBUG)
+    logger.addHandler(_file_handler)
+except Exception:
+    pass  # can't write log file — stderr only
+
+# Track in-flight operations for diagnostics
+_active_calls = {}
+
+
+def _log_tool(fn):
+    """Decorator that logs tool calls with timing and error tracking."""
+    @wraps(fn)
+    async def wrapper(*args, **kwargs):
+        call_id = f"{fn.__name__}-{int(time.time() * 1000) % 100000}"
+        # Build a short summary of the args for logging
+        arg_summary = ""
+        if args:
+            arg_summary = str(args[0])[:60]
+        if kwargs:
+            kw_parts = [f"{k}={str(v)[:30]}" for k, v in list(kwargs.items())[:3]]
+            arg_summary += " " + " ".join(kw_parts) if arg_summary else " ".join(kw_parts)
+
+        _active_calls[call_id] = {
+            "tool": fn.__name__,
+            "started": time.time(),
+            "args": arg_summary,
+        }
+
+        logger.info(f"CALL {call_id} {fn.__name__}({arg_summary})")
+        start = time.time()
+        try:
+            result = await fn(*args, **kwargs)
+            elapsed = time.time() - start
+            result_len = len(str(result)) if result else 0
+            logger.info(f"  OK {call_id} {fn.__name__} {elapsed:.1f}s ({result_len} chars)")
+            return result
+        except Exception as e:
+            elapsed = time.time() - start
+            logger.error(f"  ERR {call_id} {fn.__name__} {elapsed:.1f}s: {e}")
+            logger.debug(traceback.format_exc())
+            raise
+        finally:
+            _active_calls.pop(call_id, None)
+
+    return wrapper
+
+logger.info(f"MCP server starting, PID={os.getpid()}")
+
 # ── Config ───────────────────────────────────────────────────────────
 
 WORKSPACES_DIR = Path(os.environ.get(
     "EPIST_WORKSPACES",
     Path.home() / "EPISTEMIC_TOOLS" / "workspaces",
 ))
+
+logger.info(f"Workspaces dir: {WORKSPACES_DIR}")
 
 mcp = FastMCP("epistemic-workbench")
 
@@ -40,9 +121,7 @@ mcp = FastMCP("epistemic-workbench")
 def _resolve_workspace(workspace: str) -> Path:
     """Resolve a workspace name to a path."""
     p = Path(workspace)
-    if p.is_absolute():
-        return p
-    return WORKSPACES_DIR / workspace
+    return p if p.is_absolute() else WORKSPACES_DIR / workspace
 
 
 def _get_store(workspace: str) -> Store:
@@ -52,6 +131,7 @@ def _get_store(workspace: str) -> Store:
 # ── Tools ────────────────────────────────────────────────────────────
 
 @mcp.tool()
+@_log_tool
 async def list_workspaces() -> str:
     """List all epistemic workspaces.
 
@@ -84,6 +164,7 @@ async def list_workspaces() -> str:
 
 
 @mcp.tool()
+@_log_tool
 async def generate_thesis(thesis: str, workspace: str) -> str:
     """Generate a full argument graph from a thesis statement.
 
@@ -126,6 +207,7 @@ async def generate_thesis(thesis: str, workspace: str) -> str:
 
 
 @mcp.tool()
+@_log_tool
 async def get_summary(workspace: str) -> str:
     """Get the full analysis summary for a workspace's thesis.
 
@@ -160,6 +242,7 @@ async def get_summary(workspace: str) -> str:
 
 
 @mcp.tool()
+@_log_tool
 async def enhance_and_accept(workspace: str) -> str:
     """Suggest an enhanced thesis and regenerate the argument graph.
 
@@ -233,6 +316,7 @@ async def enhance_and_accept(workspace: str) -> str:
 
 
 @mcp.tool()
+@_log_tool
 async def suggest_enhancement(workspace: str) -> str:
     """Suggest an enhanced thesis WITHOUT accepting it.
 
@@ -269,6 +353,7 @@ async def suggest_enhancement(workspace: str) -> str:
 
 
 @mcp.tool()
+@_log_tool
 async def get_versions(workspace: str) -> str:
     """Show version history for a workspace from git log.
 
@@ -312,6 +397,7 @@ async def get_versions(workspace: str) -> str:
 
 
 @mcp.tool()
+@_log_tool
 async def get_workspace_stats(workspace: str) -> str:
     """Get object counts and thesis info for a workspace.
 
@@ -342,6 +428,7 @@ async def get_workspace_stats(workspace: str) -> str:
 # ── Manual intervention tools ─────────────────────────────────────────
 
 @mcp.tool()
+@_log_tool
 async def respond_to_defeater(workspace: str, argument_id: str, response: str, defeater_index: int = -1) -> str:
     """Rebut a defeater on an argument with a counter-response.
 
@@ -394,6 +481,7 @@ async def respond_to_defeater(workspace: str, argument_id: str, response: str, d
 
 
 @mcp.tool()
+@_log_tool
 async def concede_defeater(workspace: str, argument_id: str, note: str, defeater_index: int = -1) -> str:
     """Concede a defeater — accept it as a valid criticism that still defeats the argument.
 
@@ -452,6 +540,7 @@ async def concede_defeater(workspace: str, argument_id: str, note: str, defeater
 
 
 @mcp.tool()
+@_log_tool
 async def add_evidence_to_claim(workspace: str, claim_id: str, title: str,
                                  description: str, source: str = "",
                                  evidence_type: str = "observation",
@@ -515,6 +604,7 @@ async def add_evidence_to_claim(workspace: str, claim_id: str, title: str,
 
 
 @mcp.tool()
+@_log_tool
 async def challenge_claim(workspace: str, claim_id: str, description: str,
                            defeater_type: str = "undercutting") -> str:
     """Add a defeater/challenge to arguments supporting a claim.
@@ -565,6 +655,7 @@ async def challenge_claim(workspace: str, claim_id: str, description: str,
 
 
 @mcp.tool()
+@_log_tool
 async def set_confidence(workspace: str, claim_id: str, confidence: float,
                           note: str = "") -> str:
     """Manually set confidence on a claim.
@@ -603,6 +694,7 @@ async def set_confidence(workspace: str, claim_id: str, confidence: float,
 
 
 @mcp.tool()
+@_log_tool
 async def show_graph(workspace: str) -> str:
     """Show the argument graph structure for the current thesis.
 
@@ -704,6 +796,7 @@ def _autosave_if_dirty(s, label: str = "auto-save"):
 
 
 @mcp.tool()
+@_log_tool
 async def fork_workspace(workspace: str, fork_name: str) -> str:
     """Create a new fork (git branch) of an argument graph workspace.
 
@@ -736,6 +829,7 @@ async def fork_workspace(workspace: str, fork_name: str) -> str:
 
 
 @mcp.tool()
+@_log_tool
 async def list_forks(workspace: str) -> str:
     """List all forks (branches) in a workspace with their thesis text.
 
@@ -771,6 +865,7 @@ async def list_forks(workspace: str) -> str:
 
 
 @mcp.tool()
+@_log_tool
 async def switch_fork(workspace: str, fork_name: str) -> str:
     """Switch to a different fork (branch).
 
@@ -808,6 +903,7 @@ async def switch_fork(workspace: str, fork_name: str) -> str:
 
 
 @mcp.tool()
+@_log_tool
 async def compare_forks(workspace: str, other_branch: str) -> str:
     """Show a structural diff between the current fork and another fork.
 
@@ -839,6 +935,7 @@ async def compare_forks(workspace: str, other_branch: str) -> str:
 
 
 @mcp.tool()
+@_log_tool
 async def merge_forks(workspace: str, source_branch: str, mode: str = "synthesize") -> str:
     """Merge another fork into the current one.
 
@@ -939,9 +1036,63 @@ async def merge_forks(workspace: str, source_branch: str, mode: str = "synthesiz
     )
 
 
+# ── Diagnostics ──────────────────────────────────────────────────────
+
+_server_start_time = time.time()
+
+
+@mcp.tool()
+@_log_tool
+async def server_status() -> str:
+    """Show MCP server diagnostics: uptime, active calls, log file location.
+
+    Use this to diagnose timeouts or unresponsive behavior.
+    """
+    uptime = time.time() - _server_start_time
+    hours = int(uptime // 3600)
+    minutes = int((uptime % 3600) // 60)
+    seconds = int(uptime % 60)
+
+    lines = [
+        f"**Epistemic Workbench MCP Server**\n",
+        f"- PID: `{os.getpid()}`",
+        f"- Uptime: {hours}h {minutes}m {seconds}s",
+        f"- Workspaces dir: `{WORKSPACES_DIR}`",
+        f"- Log file: `{_log_dir / '.mcp-server.log'}`",
+        f"- Active calls: {len(_active_calls)}",
+    ]
+
+    if _active_calls:
+        lines.append("\n**In-flight operations:**\n")
+        for call_id, info in _active_calls.items():
+            elapsed = time.time() - info["started"]
+            lines.append(
+                f"- `{call_id}` **{info['tool']}** — {elapsed:.0f}s elapsed"
+                f"\n  args: {info['args']}"
+            )
+    else:
+        lines.append("\n_No operations in flight._")
+
+    # Show last 10 lines of log file
+    try:
+        log_path = _log_dir / ".mcp-server.log"
+        if log_path.exists():
+            log_lines = log_path.read_text().strip().split("\n")
+            recent = log_lines[-15:] if len(log_lines) > 15 else log_lines
+            lines.append(f"\n**Recent log ({len(log_lines)} total lines):**\n")
+            lines.append("```")
+            lines.extend(recent)
+            lines.append("```")
+    except Exception:
+        pass
+
+    return "\n".join(lines)
+
+
 # ── Entry point ──────────────────────────────────────────────────────
 
 def main():
+    logger.info("MCP server running (stdio transport)")
     mcp.run(transport="stdio")
 
 
