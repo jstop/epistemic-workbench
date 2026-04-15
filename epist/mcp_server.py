@@ -1133,22 +1133,32 @@ _server_start_time = time.time()
 async def job_status(job_id: str = "") -> str:
     """Check the status of a background job (generate, enhance, merge).
 
-    If job_id is empty, shows all recent jobs. If a job is completed,
-    returns the full result. If failed, returns the error.
+    If the job is still running, this tool waits up to 45 seconds for it
+    to finish before responding. If it finishes during the wait, you get
+    the result immediately. If still running after 45s, you get a
+    progress update — just call job_status again.
 
     Args:
         job_id: The job ID returned by generate_thesis, enhance_and_accept, etc.
     """
     if job_id and job_id in _jobs:
         job = _jobs[job_id]
+
+        # If still running, wait up to 45s for completion (stays under 60s MCP timeout)
+        if job["status"] == "running":
+            logger.info(f"JOB {job_id} still running, waiting up to 45s for completion")
+            for _ in range(45):
+                await asyncio.sleep(1)
+                if job["status"] != "running":
+                    break
+
         elapsed = (job.get("finished") or time.time()) - job["started"]
 
         if job["status"] == "running":
             return (
                 f"**Job `{job_id}` is still running** ({elapsed:.0f}s elapsed)\n\n"
                 f"Tool: {job['tool']}\n\n"
-                f"This is normal — generation takes 2-3 minutes. "
-                f"**Wait 60 seconds** then check once more. Do not poll repeatedly."
+                f"Call job_status again to continue waiting."
             )
         elif job["status"] == "completed":
             return (
