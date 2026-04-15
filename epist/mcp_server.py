@@ -268,9 +268,11 @@ async def generate_thesis(thesis: str, workspace: str) -> str:
         f"- Job ID: `{job_id}`\n"
         f"- Workspace: `{workspace}`\n"
         f"- Thesis: {thesis[:100]}{'...' if len(thesis) > 100 else ''}\n\n"
-        f"This takes 30-90 seconds. Call **job_status** with job_id `{job_id}` "
-        f"to check progress and get the result.\n\n"
-        f"Or call **get_summary** on workspace `{workspace}` once the job completes."
+        f"This typically takes 2-3 minutes. **Wait at least 90 seconds** before "
+        f"checking, then call **job_status** once with job_id `{job_id}`.\n\n"
+        f"Do NOT poll repeatedly — one check after 90 seconds is sufficient. "
+        f"If still running, wait another 60 seconds and check once more.\n\n"
+        f"When complete, call **get_summary** on workspace `{workspace}` to see the analysis."
     )
 
 
@@ -392,9 +394,11 @@ async def enhance_and_accept(workspace: str) -> str:
         f"**Enhancement started** in background.\n\n"
         f"- Job ID: `{job_id}`\n"
         f"- Workspace: `{workspace}`\n\n"
-        f"This takes 60-120 seconds (analyze + enhance + regenerate). "
-        f"Call **job_status** with job_id `{job_id}` to check progress.\n\n"
-        f"Or call **get_summary** on workspace `{workspace}` once the job completes."
+        f"This typically takes 2-4 minutes. **Wait at least 2 minutes** before "
+        f"checking, then call **job_status** once with job_id `{job_id}`.\n\n"
+        f"Do NOT poll repeatedly — one check after 2 minutes is sufficient. "
+        f"If still running, wait another 60 seconds and check once more.\n\n"
+        f"When complete, call **get_summary** on workspace `{workspace}` to see the analysis."
     )
 
 
@@ -1143,7 +1147,8 @@ async def job_status(job_id: str = "") -> str:
             return (
                 f"**Job `{job_id}` is still running** ({elapsed:.0f}s elapsed)\n\n"
                 f"Tool: {job['tool']}\n\n"
-                f"Call job_status again in 15-30 seconds to check."
+                f"This is normal — generation takes 2-3 minutes. "
+                f"**Wait 60 seconds** then check once more. Do not poll repeatedly."
             )
         elif job["status"] == "completed":
             return (
