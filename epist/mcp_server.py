@@ -104,6 +104,53 @@ def _log_tool(fn):
 
 logger.info(f"MCP server starting, PID={os.getpid()}")
 
+
+# ── Background job queue ─────────────────────────────────────────────
+# Long-running LLM calls (generate, enhance, synthesize) exceed Claude
+# Desktop's hardcoded 60s MCP timeout. Instead of blocking, we run them
+# in a background thread and return a job ID immediately. The caller
+# polls job_status to get the result.
+
+import asyncio
+import threading
+import uuid
+
+_jobs = {}  # job_id -> {status, tool, workspace, started, finished, result, error}
+
+
+def _run_job_in_thread(job_id, coro_fn, *args):
+    """Run an async function in a new event loop on a background thread."""
+    def _thread_target():
+        logger.info(f"JOB {job_id} starting in background thread")
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(coro_fn(*args))
+            _jobs[job_id]["status"] = "completed"
+            _jobs[job_id]["result"] = result
+            _jobs[job_id]["finished"] = time.time()
+            elapsed = _jobs[job_id]["finished"] - _jobs[job_id]["started"]
+            logger.info(f"JOB {job_id} completed in {elapsed:.1f}s")
+        except Exception as e:
+            _jobs[job_id]["status"] = "failed"
+            _jobs[job_id]["error"] = str(e)
+            _jobs[job_id]["finished"] = time.time()
+            logger.error(f"JOB {job_id} failed: {e}")
+            logger.debug(traceback.format_exc())
+        finally:
+            loop.close()
+
+    _jobs[job_id] = {
+        "status": "running",
+        "tool": coro_fn.__name__,
+        "started": time.time(),
+        "finished": None,
+        "result": None,
+        "error": None,
+    }
+    t = threading.Thread(target=_thread_target, daemon=True)
+    t.start()
+
+
 # ── Config ───────────────────────────────────────────────────────────
 
 WORKSPACES_DIR = Path(os.environ.get(
@@ -163,18 +210,8 @@ async def list_workspaces() -> str:
     return "\n".join(results)
 
 
-@mcp.tool()
-@_log_tool
-async def generate_thesis(thesis: str, workspace: str) -> str:
-    """Generate a full argument graph from a thesis statement.
-
-    Creates a new git-versioned workspace with claims, evidence, arguments,
-    assumptions, and defeaters decomposed from the thesis.
-
-    Args:
-        thesis: The thesis statement to decompose
-        workspace: Workspace name (created under workspaces directory)
-    """
+async def _do_generate(thesis: str, workspace: str) -> str:
+    """The actual generate work — runs in a background thread."""
     ws_path = _resolve_workspace(workspace)
     s = Store(ws_path)
     s.clear()
@@ -183,7 +220,6 @@ async def generate_thesis(thesis: str, workspace: str) -> str:
 
     thesis_id = await generate_full_graph_async(s, thesis)
 
-    # Write summary
     result = compute_summary(s, thesis_id)
     (s.home / "summary.md").write_text(result["markdown"])
 
@@ -203,6 +239,40 @@ async def generate_thesis(thesis: str, workspace: str) -> str:
         f"{counts['arguments']} arguments, {counts['assumptions']} assumptions, "
         f"{counts['defeaters']} defeaters\n\n"
         f"Thesis ID: {thesis_id}"
+    )
+
+
+@mcp.tool()
+@_log_tool
+async def generate_thesis(thesis: str, workspace: str) -> str:
+    """Generate a full argument graph from a thesis statement.
+
+    This runs in the background because it takes 30-90 seconds.
+    Returns a job ID immediately. Use job_status to check when it's done
+    and retrieve the result.
+
+    Args:
+        thesis: The thesis statement to decompose
+        workspace: Workspace name (created under workspaces directory)
+    """
+    # Quick validation before spawning the background job
+    ws_path = _resolve_workspace(workspace)
+    ws_path.mkdir(parents=True, exist_ok=True)
+
+    job_id = f"gen-{uuid.uuid4().hex[:8]}"
+    _jobs[job_id] = {"workspace": workspace, "thesis": thesis[:80]}
+    _run_job_in_thread(job_id, _do_generate, thesis, workspace)
+
+    return (
+        f"**Generation started** in background.\n\n"
+        f"- Job ID: `{job_id}`\n"
+        f"- Workspace: `{workspace}`\n"
+        f"- Thesis: {thesis[:100]}{'...' if len(thesis) > 100 else ''}\n\n"
+        f"This typically takes 2-3 minutes. **Wait at least 90 seconds** before "
+        f"checking, then call **job_status** once with job_id `{job_id}`.\n\n"
+        f"Do NOT poll repeatedly — one check after 90 seconds is sufficient. "
+        f"If still running, wait another 60 seconds and check once more.\n\n"
+        f"When complete, call **get_summary** on workspace `{workspace}` to see the analysis."
     )
 
 
@@ -241,18 +311,8 @@ async def get_summary(workspace: str) -> str:
     return result["markdown"]
 
 
-@mcp.tool()
-@_log_tool
-async def enhance_and_accept(workspace: str) -> str:
-    """Suggest an enhanced thesis and regenerate the argument graph.
-
-    Analyzes the current thesis, suggests improvements based on objections
-    and weaknesses, then generates a new argument graph for the enhanced thesis.
-    The old version is preserved in git history.
-
-    Args:
-        workspace: Workspace name or path
-    """
+async def _do_enhance_and_accept(workspace: str) -> str:
+    """The actual enhance+accept work — runs in a background thread."""
     s = _get_store(workspace)
     if not s.claims:
         return "No claims in this workspace. Use generate_thesis first."
@@ -264,24 +324,20 @@ async def enhance_and_accept(workspace: str) -> str:
     thesis_info = summary_data["thesis"]
     resolved_id = thesis_info["id"]
 
-    # Get enhancement suggestion
     result = await enhance_thesis_async(s, resolved_id)
 
     enhanced_text = result["enhanced_thesis"]
     rationale = result.get("rationale", "")
     changes = result.get("changes", [])
 
-    # Clear and regenerate
     s.clear()
     new_thesis_id = await generate_full_graph_async(s, enhanced_text)
 
-    # Write summary
     new_summary = compute_summary(s, new_thesis_id)
     (s.home / "summary.md").write_text(new_summary["markdown"])
 
     counts = count_subgraph(s, new_thesis_id)
 
-    # Git commit
     change_lines = ""
     for ch in changes:
         tag = ch.get("type", "change") if isinstance(ch, dict) else "change"
@@ -298,7 +354,6 @@ async def enhance_and_accept(workspace: str) -> str:
         f"{counts['arguments']} arguments"
     )
 
-    # Build response
     change_summary = "\n".join(
         f"- [{ch.get('type', 'change')}] {ch.get('description', '')}"
         for ch in changes if isinstance(ch, dict)
@@ -312,6 +367,38 @@ async def enhance_and_accept(workspace: str) -> str:
         f"Created: {counts['claims']} claims, {counts['evidence']} evidence, "
         f"{counts['arguments']} arguments\n\n"
         f"---\n\nUse get_summary to see the full analysis of the enhanced thesis."
+    )
+
+
+@mcp.tool()
+@_log_tool
+async def enhance_and_accept(workspace: str) -> str:
+    """Suggest an enhanced thesis and regenerate the argument graph.
+
+    This runs in the background because it takes 60-120 seconds (enhance + generate).
+    Returns a job ID immediately. Use job_status to check when it's done.
+
+    Args:
+        workspace: Workspace name or path
+    """
+    # Quick validation
+    s = _get_store(workspace)
+    if not s.claims:
+        return "No claims in this workspace. Use generate_thesis first."
+
+    job_id = f"enh-{uuid.uuid4().hex[:8]}"
+    _jobs[job_id] = {"workspace": workspace}
+    _run_job_in_thread(job_id, _do_enhance_and_accept, workspace)
+
+    return (
+        f"**Enhancement started** in background.\n\n"
+        f"- Job ID: `{job_id}`\n"
+        f"- Workspace: `{workspace}`\n\n"
+        f"This typically takes 2-4 minutes. **Wait at least 2 minutes** before "
+        f"checking, then call **job_status** once with job_id `{job_id}`.\n\n"
+        f"Do NOT poll repeatedly — one check after 2 minutes is sufficient. "
+        f"If still running, wait another 60 seconds and check once more.\n\n"
+        f"When complete, call **get_summary** on workspace `{workspace}` to see the analysis."
     )
 
 
@@ -1036,15 +1123,78 @@ async def merge_forks(workspace: str, source_branch: str, mode: str = "synthesiz
     )
 
 
-# ── Diagnostics ──────────────────────────────────────────────────────
+# ── Job status + diagnostics ──────────────────────────────────────────
 
 _server_start_time = time.time()
 
 
 @mcp.tool()
 @_log_tool
+async def job_status(job_id: str = "") -> str:
+    """Check the status of a background job (generate, enhance, merge).
+
+    If the job is still running, this tool waits up to 45 seconds for it
+    to finish before responding. If it finishes during the wait, you get
+    the result immediately. If still running after 45s, you get a
+    progress update — just call job_status again.
+
+    Args:
+        job_id: The job ID returned by generate_thesis, enhance_and_accept, etc.
+    """
+    if job_id and job_id in _jobs:
+        job = _jobs[job_id]
+
+        # If still running, wait up to 45s for completion (stays under 60s MCP timeout)
+        if job["status"] == "running":
+            logger.info(f"JOB {job_id} still running, waiting up to 45s for completion")
+            for _ in range(45):
+                await asyncio.sleep(1)
+                if job["status"] != "running":
+                    break
+
+        elapsed = (job.get("finished") or time.time()) - job["started"]
+
+        if job["status"] == "running":
+            return (
+                f"**Job `{job_id}` is still running** ({elapsed:.0f}s elapsed)\n\n"
+                f"Tool: {job['tool']}\n\n"
+                f"Call job_status again to continue waiting."
+            )
+        elif job["status"] == "completed":
+            return (
+                f"**Job `{job_id}` completed** in {elapsed:.0f}s\n\n"
+                f"---\n\n{job['result']}"
+            )
+        elif job["status"] == "failed":
+            return (
+                f"**Job `{job_id}` failed** after {elapsed:.0f}s\n\n"
+                f"Error: {job['error']}"
+            )
+
+    # Show all jobs
+    if not _jobs:
+        return "No jobs have been submitted yet."
+
+    lines = [f"**All jobs ({len(_jobs)}):**\n"]
+    for jid, job in sorted(_jobs.items(), key=lambda x: x[1].get("started", 0), reverse=True):
+        elapsed = (job.get("finished") or time.time()) - job.get("started", 0)
+        status_icon = {"running": "⟳", "completed": "✓", "failed": "✗"}.get(job["status"], "?")
+        lines.append(
+            f"- {status_icon} `{jid}` **{job['tool']}** — {job['status']} ({elapsed:.0f}s)"
+        )
+        if job.get("workspace"):
+            lines.append(f"  workspace: {job['workspace']}")
+    if not job_id:
+        lines.append(f"\nCall job_status with a specific job_id to get the full result.")
+    elif job_id not in _jobs:
+        lines.append(f"\nJob `{job_id}` not found.")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+@_log_tool
 async def server_status() -> str:
-    """Show MCP server diagnostics: uptime, active calls, log file location.
+    """Show MCP server diagnostics: uptime, active calls, background jobs, log file.
 
     Use this to diagnose timeouts or unresponsive behavior.
     """
@@ -1063,7 +1213,7 @@ async def server_status() -> str:
     ]
 
     if _active_calls:
-        lines.append("\n**In-flight operations:**\n")
+        lines.append("\n**In-flight tool calls:**\n")
         for call_id, info in _active_calls.items():
             elapsed = time.time() - info["started"]
             lines.append(
@@ -1071,7 +1221,16 @@ async def server_status() -> str:
                 f"\n  args: {info['args']}"
             )
     else:
-        lines.append("\n_No operations in flight._")
+        lines.append("\n_No tool calls in flight._")
+
+    running_jobs = {jid: j for jid, j in _jobs.items() if j["status"] == "running"}
+    if running_jobs:
+        lines.append(f"\n**Background jobs ({len(running_jobs)} running):**\n")
+        for jid, job in running_jobs.items():
+            elapsed = time.time() - job["started"]
+            lines.append(f"- `{jid}` **{job['tool']}** — {elapsed:.0f}s elapsed")
+    else:
+        lines.append(f"\n_No background jobs running._ ({len(_jobs)} total jobs tracked)")
 
     # Show last 10 lines of log file
     try:
