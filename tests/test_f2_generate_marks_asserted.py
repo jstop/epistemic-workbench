@@ -66,6 +66,7 @@ def test_generate_full_graph_stamps_asserted(monkeypatch, tmp_path):
     monkeypatch.setattr(recall_client, "record_derivation", lambda **k: None)
 
     s = Store(tmp_path / "ws")
+    s.init_workspace()  # real callers create the workspace dir before generating
     thesis_id = llm.generate_full_graph(s, "thesis")
 
     assert s.evidence, "generate should have created evidence"
