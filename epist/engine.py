@@ -273,16 +273,6 @@ OBJECTION_RELS = {"refutes", "rebuts"}
 # objection once — via the edge — instead of double-counting the mirror.
 EDGE_DEFEATER_PREFIX = "[edge:"
 
-# Pre-tag format: workspaces imported before the dedup tag was added carry edge-
-# mirror defeaters described as "refutes: …" / "rebuts: …" / "concedes: …".
-# Recognize those too so stale workspaces don't double-count without re-import.
-_LEGACY_EDGE_DEFEATER_PREFIXES = ("refutes:", "rebuts:", "concedes:")
-
-
-def _is_edge_mirror_defeater(description: str) -> bool:
-    d = description or ""
-    return d.startswith(EDGE_DEFEATER_PREFIX) or d.startswith(_LEGACY_EDGE_DEFEATER_PREFIXES)
-
 # Embedded defeaters carry no numeric strength, so an objection expressed only as
 # a defeater (the generated-graph channel) reduces its target by this fixed
 # factor. Heuristic, and only feeds the ADVISORY derived estimate.
@@ -402,7 +392,7 @@ def propagate_confidence(store, atms=None):
             for d in a.defeaters:
                 if d.status not in (DefeaterStatus.ACTIVE, DefeaterStatus.CONCEDED):
                     continue
-                if _is_edge_mirror_defeater(d.description):
+                if (d.description or "").startswith(EDGE_DEFEATER_PREFIX):
                     continue  # already counted via its edge in (1)
                 objection_factor *= (1.0 - DEFAULT_OBJECTION_STRENGTH)
 

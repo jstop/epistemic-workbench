@@ -130,29 +130,6 @@ def test_osmio_thesis_not_inflated_by_parallel_supports(tmp_path):
     assert derived["I_claim"] < 0.20, f"thesis inflated to {derived['I_claim']:.2%}"
 
 
-def test_legacy_edge_defeaters_not_double_counted(tmp_path):
-    """A workspace imported before the [edge:] dedup tag carries edge-mirror
-    defeaters as 'refutes: …'. The pass must recognize those as edge-mirrors so
-    a stale workspace doesn't double-count without a re-import."""
-    from epist.graph_io import add_claim, link
-    s = Store(tmp_path / "ws")
-    t = add_claim(s, "t", node_type="thesis")
-    p = add_claim(s, "p", confidence=0.8)
-    link(s, p.id, t.id, "supports")
-    o = add_claim(s, "o", node_type="objection", confidence=0.7)
-    link(s, o.id, t.id, "refutes")
-    tagged = propagate_confidence(s)[t.id]
-    # rewrite the synthesized defeater to the OLD untagged format and reload
-    for a in s.arguments.values():
-        for d in a.defeaters:
-            if d.description.startswith("[edge:"):
-                rel = d.description[len("[edge:"):].split("]", 1)[0]
-                d.description = f"{rel}: {d.description.split('] ', 1)[1]}"
-    s.save()
-    legacy = propagate_confidence(Store(tmp_path / "ws"))[t.id]
-    assert _approx(tagged, legacy), f"legacy {legacy} != tagged {tagged} (double-count)"
-
-
 def test_objection_not_double_counted(tmp_path):
     """Regression: a refutes edge must reduce the conclusion exactly once, not
     both via its synthesized ATMS defeater AND via the objection factor."""
