@@ -1152,6 +1152,130 @@ async def list_unsourced(workspace: str) -> str:
     return "\n".join(lines)
 
 
+# ── F5: corpus ingestion (propose-then-curate) ────────────────────────
+
+async def _do_ingest(workspace: str, source_text: str, url: str, title: str) -> str:
+    from epist import ingest
+    s = _get_store(workspace)
+    if not s.is_git_repo():
+        s.git_init()
+    source_ref = {"url": url} if url else None
+    result = ingest.ingest_document(
+        s, source_text=source_text or None, source_ref=source_ref,
+        extractor=ingest.llm_extractor, title=(title or None),
+    )
+    s.git_commit(f"[ingest] proposal {result['proposal_id']} from source")
+    c = result["counts"]
+    return (
+        f"**Proposal `{result['proposal_id']}`** created (nothing committed yet).\n\n"
+        f"- recall source_id: {result['source_id']}\n"
+        f"- Proposed: {c['nodes']} nodes, {c['edges']} edges\n\n"
+        f"Review with **review_proposal**, then **commit_proposal** with the "
+        f"node ids you accept."
+    )
+
+
+@mcp.tool()
+@_log_tool
+async def ingest_document(workspace: str, source_text: str = "", url: str = "",
+                          title: str = "") -> str:
+    """Ingest a document/transcript and PROPOSE the argumentation it contains.
+
+    Registers the source in recall, extracts proposed claims/arguments/objections
+    — each grounded in a verbatim source span — and saves them as a pending
+    proposal. NOTHING enters the live graph until you commit_proposal. Runs in
+    the background (LLM extraction); poll job_status.
+
+    Args:
+        workspace: Workspace name or path
+        source_text: the raw document text (or use url)
+        url: a source URL (stored as provenance; content still needed in source_text)
+        title: optional title/summary for the source
+    """
+    if not (source_text or url):
+        return "Error: provide source_text (and optionally url/title)."
+    ws_path = _resolve_workspace(workspace)
+    ws_path.mkdir(parents=True, exist_ok=True)
+    job_id = f"ing-{uuid.uuid4().hex[:8]}"
+    _jobs[job_id] = {"workspace": workspace}
+    _run_job_in_thread(job_id, _do_ingest, workspace, source_text, url, title)
+    return (
+        f"**Ingestion started** in background.\n\n"
+        f"- Job ID: `{job_id}`\n- Workspace: `{workspace}`\n\n"
+        f"Wait ~90s, then call **job_status** with `{job_id}` once. When done it "
+        f"returns a proposal id; use review_proposal / commit_proposal."
+    )
+
+
+@mcp.tool()
+@_log_tool
+async def review_proposal(workspace: str, proposal_id: str) -> str:
+    """Show a pending ingestion proposal for curation (read-only).
+
+    Args:
+        workspace: Workspace name or path
+        proposal_id: the id returned by ingest_document
+    """
+    from epist import ingest
+    s = _get_store(workspace)
+    try:
+        pr = ingest.review_proposal(s, proposal_id)
+    except ValueError as e:
+        return f"Error: {e}"
+    lines = [f"**Proposal `{proposal_id}`** — status: {pr.get('status')} "
+             f"(source_id={pr.get('source_id')})\n"]
+    lines.append(f"_{len(pr.get('nodes', []))} proposed nodes, "
+                 f"{len(pr.get('edges', []))} edges. Nothing committed._\n")
+    for n in pr.get("nodes", []):
+        span = n.get("span")
+        span_str = f"  ↳ span: \"{span[:80]}\"" if isinstance(span, str) else ""
+        lines.append(f"- `{n.get('id')}` [{n.get('type','claim')}] {n.get('text','')[:90]}")
+        if span_str:
+            lines.append(span_str)
+    lines.append("\nCommit with commit_proposal(workspace, proposal_id, accepted_node_ids).")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+@_log_tool
+async def commit_proposal(workspace: str, proposal_id: str,
+                          accepted_node_ids: str) -> str:
+    """Commit accepted nodes from an ingestion proposal into the live graph.
+
+    Only the nodes you list are committed (and edges between accepted nodes).
+    Accepted nodes get real provenance recorded in recall back to the source.
+
+    Args:
+        workspace: Workspace name or path
+        proposal_id: the proposal to commit from
+        accepted_node_ids: JSON array (["n0","n2"]) or comma-separated ids; use
+            "*" to accept all proposed nodes
+    """
+    from epist import ingest
+    s = _get_store(workspace)
+    try:
+        pr = ingest.review_proposal(s, proposal_id)
+    except ValueError as e:
+        return f"Error: {e}"
+    raw = accepted_node_ids.strip()
+    if raw == "*":
+        ids = [n.get("id") for n in pr.get("nodes", []) if n.get("id")]
+    elif raw.startswith("["):
+        ids = json.loads(raw)
+    else:
+        ids = [x.strip() for x in raw.split(",") if x.strip()]
+    try:
+        result = ingest.commit_proposal(s, proposal_id, ids)
+    except ValueError as e:
+        return f"Error: {e}"
+    if s.is_git_repo():
+        s.git_commit(f"[ingest] commit {len(ids)} nodes from {proposal_id}")
+    c = result["committed"]
+    return (f"Committed from `{proposal_id}`: {c['claims']} claims, "
+            f"{c['evidence']} evidence, {c['arguments']} arguments, {c['edges']} edges "
+            f"({result['skipped']} skipped). Sourced to recall id {result['source_id']}.")
+
+
 # ── Fork-and-merge tools ─────────────────────────────────────────────
 
 import re as _re
