@@ -64,6 +64,41 @@ class EvaluationJudgment(Enum):
     NEEDS_WORK = "needs_work"
 
 
+class NodeType(Enum):
+    """Logical role of a Claim node. Lets imported/authored graphs carry the
+    dialectical distinctions from the brief (thesis/objection/concession)
+    without needing separate dataclasses — they are all Claims under the hood,
+    so the existing ATMS/argument engine continues to analyze them."""
+    CLAIM = "claim"
+    THESIS = "thesis"
+    OBJECTION = "objection"
+    CONCESSION = "concession"
+
+
+class EdgeRelation(Enum):
+    """Typed relations for the generic edge layer (F1).
+
+    `supports` and the defeater-family (`refutes`/`rebuts`) overlap with the
+    Argument/Defeater constructs; the generic layer is what makes authored and
+    imported graphs round-trip losslessly, and is the only home for relations
+    the argument model cannot express (`grounds`, `narrows`, `supersedes`)."""
+    SUPPORTS = "supports"
+    REFUTES = "refutes"
+    REBUTS = "rebuts"
+    CONCEDES = "concedes"
+    GROUNDS = "grounds"
+    NARROWS = "narrows"
+    SUPERSEDES = "supersedes"
+
+
+# Stored node-status vocabulary for imported/authored graphs (brief §4). When a
+# node carries no explicit status, the engine's ATMS computes one at read time.
+NODE_STATUSES = {"live", "defeated", "superseded", "conceded", "rebutted", "open"}
+
+# Argument premise-combination modes (F3 wires propagation onto these).
+SUPPORT_MODES = {"conjunctive", "disjunctive", "independent"}
+
+
 PATTERN_METADATA = {
     InferencePattern.MODUS_PONENS: {
         "min_premises": 2,
@@ -149,6 +184,9 @@ class Claim:
     is_root: bool = False
     previous_version: Optional[str] = None   # claim ID of predecessor thesis
     version_meta: Optional[dict] = None      # {"rationale": str, "changes": list}
+    node_type: str = "claim"                 # claim|thesis|objection|concession (F1)
+    status: Optional[str] = None             # stored status override; None ⇒ ATMS computes (F1/F4)
+    killed_by: Optional[str] = None          # id of the node that defeated/superseded this one (F1/F4)
     notes: str = ""
     created_at: float = field(default_factory=time.time)
     id: str = ""
@@ -193,6 +231,7 @@ class Argument:
     label: str = ""
     confidence: Confidence = field(default_factory=lambda: Confidence(0.7))
     defeaters: list = field(default_factory=list)
+    support_mode: str = "independent"  # conjunctive|disjunctive|independent (F3 propagation)
     identity: Identity = field(default_factory=Identity)
     notes: str = ""
     created_at: float = field(default_factory=time.time)
@@ -248,5 +287,31 @@ class Prediction:
                 "subject": self.subject,
                 "predicate": self.predicate,
                 "object": self.object,
+                "created_at": self.created_at,
+            })
+
+
+@dataclass
+class Edge:
+    """A typed relation between two epistemic objects (F1 generic edge layer).
+
+    The existing model expresses `supports` via Argument and rebut/undercut via
+    embedded Defeaters; the generic layer makes authored/imported graphs
+    round-trip losslessly and is the only home for `grounds`/`narrows`/
+    `supersedes`. The ATMS engine reads these via an adapter (see engine.py)."""
+    from_id: str
+    rel: str  # one of EdgeRelation values
+    to: str
+    notes: str = ""
+    created_at: float = field(default_factory=time.time)
+    id: str = ""
+
+    def __post_init__(self):
+        if not self.id:
+            self.id = _hash({
+                "type": "edge",
+                "from_id": self.from_id,
+                "rel": self.rel,
+                "to": self.to,
                 "created_at": self.created_at,
             })

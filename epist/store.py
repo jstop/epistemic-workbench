@@ -13,7 +13,7 @@ from dataclasses import asdict
 
 logger = logging.getLogger("epist.store")
 from .model import (
-    Claim, Evidence, Argument, Evaluation, Prediction,
+    Claim, Evidence, Argument, Evaluation, Prediction, Edge,
     Confidence, Scope, Identity, Defeater,
     Modality, EvidenceType, InferencePattern, DefeaterType,
     DefeaterStatus, EvaluationJudgment,
@@ -49,6 +49,9 @@ def _deserialize_claim(d):
         is_root=d.get("is_root", False),
         previous_version=d.get("previous_version", None),
         version_meta=d.get("version_meta", None),
+        node_type=d.get("node_type", "claim"),
+        status=d.get("status", None),
+        killed_by=d.get("killed_by", None),
         notes=d.get("notes", ""),
         created_at=d.get("created_at", 0),
         id=d["id"],
@@ -84,6 +87,7 @@ def _deserialize_argument(d):
         label=d.get("label", ""),
         confidence=Confidence(**d["confidence"]) if isinstance(d["confidence"], dict) else Confidence(d["confidence"]),
         defeaters=defeaters,
+        support_mode=d.get("support_mode", "independent"),
         identity=Identity(**d.get("identity", {})) if isinstance(d.get("identity"), dict) else Identity(),
         notes=d.get("notes", ""),
         created_at=d.get("created_at", 0),
@@ -116,6 +120,17 @@ def _deserialize_prediction(d):
     )
 
 
+def _deserialize_edge(d):
+    return Edge(
+        from_id=d.get("from_id") or d.get("from"),
+        rel=d["rel"],
+        to=d["to"],
+        notes=d.get("notes", ""),
+        created_at=d.get("created_at", 0),
+        id=d.get("id", ""),
+    )
+
+
 class Store:
     def __init__(self, home: Path):
         self.home = Path(home)
@@ -124,6 +139,7 @@ class Store:
         self.arguments: dict[str, Argument] = {}
         self.evaluations: dict[str, Evaluation] = {}
         self.predictions: dict[str, Prediction] = {}
+        self.edges: dict[str, Edge] = {}
         self.foundations: dict[str, dict] = {}
         self._load()
 
@@ -139,6 +155,7 @@ class Store:
             ("arguments", self.arguments, _deserialize_argument),
             ("evaluations", self.evaluations, _deserialize_evaluation),
             ("predictions", self.predictions, _deserialize_prediction),
+            ("edges", self.edges, _deserialize_edge),
         ]:
             p = self._path(name)
             if p.exists():
@@ -158,6 +175,7 @@ class Store:
             ("arguments", self.arguments),
             ("evaluations", self.evaluations),
             ("predictions", self.predictions),
+            ("edges", self.edges),
         ]:
             data = [_serialize(obj) for obj in collection.values()]
             self._path(name).write_text(json.dumps(data, indent=2, default=str))
@@ -188,6 +206,11 @@ class Store:
         self.save()
         return p
 
+    def add_edge(self, e: Edge) -> Edge:
+        self.edges[e.id] = e
+        self.save()
+        return e
+
     def get(self, eo_id: str):
         """Get any epistemic object by ID (or prefix)."""
         for collection in [self.claims, self.evidence, self.arguments,
@@ -217,6 +240,7 @@ class Store:
         self.arguments.clear()
         self.evaluations.clear()
         self.predictions.clear()
+        self.edges.clear()
         self.foundations.clear()
         self.save()
 
@@ -227,6 +251,7 @@ class Store:
         self.arguments.clear()
         self.evaluations.clear()
         self.predictions.clear()
+        self.edges.clear()
         self.foundations.clear()
         self._load()
 
@@ -399,6 +424,7 @@ class Store:
         other.arguments = {}
         other.evaluations = {}
         other.predictions = {}
+        other.edges = {}
         other.foundations = {}
 
         for name, collection, deser in [
@@ -407,6 +433,7 @@ class Store:
             ("arguments", other.arguments, _deserialize_argument),
             ("evaluations", other.evaluations, _deserialize_evaluation),
             ("predictions", other.predictions, _deserialize_prediction),
+            ("edges", other.edges, _deserialize_edge),
         ]:
             content = self._git_show_file(branch, f"{name}.json")
             if not content.strip():

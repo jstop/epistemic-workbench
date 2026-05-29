@@ -863,6 +863,143 @@ async def show_graph(workspace: str) -> str:
     return "\n".join(lines)
 
 
+# ── F1: direct authoring + import/export ──────────────────────────────
+
+@mcp.tool()
+@_log_tool
+async def add_claim(workspace: str, text: str, node_type: str = "claim",
+                    confidence: float = 0.7, status: str = "",
+                    modality: str = "empirical") -> str:
+    """Create a claim node by hand (analyzer → editor).
+
+    Args:
+        workspace: Workspace name or path
+        text: The claim statement in natural language
+        node_type: claim | thesis | objection | concession
+        confidence: 0.0–1.0
+        status: optional stored status (live/defeated/superseded/conceded/rebutted/open); blank = let ATMS compute
+        modality: empirical | analytic | normative | modal | predictive
+    """
+    from epist import graph_io
+    s = _get_store(workspace)
+    if not s.is_git_repo():
+        s.git_init()
+    try:
+        c = graph_io.add_claim(s, text, node_type=node_type, confidence=confidence,
+                               status=(status or None), modality=modality)
+    except ValueError as e:
+        return f"Error: {e}"
+    s.git_commit(f"[manual] Add {node_type}: {text[:50]}")
+    return f"Created {node_type} `{c.id[:16]}`\n{text}"
+
+
+@mcp.tool()
+@_log_tool
+async def add_argument(workspace: str, conclusion_id: str, premise_ids: str,
+                       pattern: str = "modus_ponens", label: str = "",
+                       confidence: float = 0.7,
+                       support_mode: str = "conjunctive") -> str:
+    """Create an argument linking premise ids to a conclusion id.
+
+    Args:
+        workspace: Workspace name or path
+        conclusion_id: id (or prefix) of the conclusion claim/evidence
+        premise_ids: JSON array (["id1","id2"]) or comma-separated ids
+        pattern: inference pattern (modus_ponens, abduction, induction, …)
+        label: short description
+        confidence: 0.0–1.0
+        support_mode: conjunctive | disjunctive | independent (drives F3 propagation)
+    """
+    from epist import graph_io
+    raw = premise_ids.strip()
+    if raw.startswith("["):
+        ids = json.loads(raw)
+    else:
+        ids = [p.strip() for p in raw.split(",") if p.strip()]
+    s = _get_store(workspace)
+    if not s.is_git_repo():
+        s.git_init()
+    try:
+        a = graph_io.add_argument(s, conclusion_id, ids, pattern=pattern,
+                                  label=label, confidence=confidence,
+                                  support_mode=support_mode)
+    except ValueError as e:
+        return f"Error: {e}"
+    s.git_commit(f"[manual] Add argument: {label or a.id[:12]}")
+    return (f"Created argument `{a.id[:16]}` ({support_mode}, {len(a.premises)} premises)\n"
+            f"{label or '(unlabeled)'}")
+
+
+@mcp.tool()
+@_log_tool
+async def link(workspace: str, from_id: str, to_id: str, relation: str) -> str:
+    """Create a typed edge between two objects.
+
+    relation ∈ supports, refutes, rebuts, concedes, grounds, narrows, supersedes.
+    The engine-visible constructs (arguments/defeaters/status) are kept in sync so
+    authored graphs analyze like generated ones.
+
+    Args:
+        workspace: Workspace name or path
+        from_id: source object id (or prefix)
+        to_id: target object id (or prefix)
+        relation: one of the relations above
+    """
+    from epist import graph_io
+    s = _get_store(workspace)
+    if not s.is_git_repo():
+        s.git_init()
+    try:
+        e = graph_io.link(s, from_id, to_id, relation)
+    except ValueError as ex:
+        return f"Error: {ex}"
+    s.git_commit(f"[manual] Link {relation}: {e.from_id[:8]}→{e.to[:8]}")
+    return f"Linked `{e.from_id[:12]}` —{relation}→ `{e.to[:12]}`"
+
+
+@mcp.tool()
+@_log_tool
+async def export_graph(workspace: str) -> str:
+    """Export the whole workspace graph as JSON (lossless).
+
+    Args:
+        workspace: Workspace name or path
+    """
+    from epist import graph_io
+    s = _get_store(workspace)
+    return json.dumps(graph_io.export_graph(s), indent=2, default=str)
+
+
+@mcp.tool()
+@_log_tool
+async def import_graph(workspace: str, graph_json: str, mode: str = "merge") -> str:
+    """Import a graph JSON into a workspace.
+
+    Accepts either an `epist-graph/v1` export or a {nodes, edges} document
+    (brief §4 shape). mode = merge | replace.
+
+    Args:
+        workspace: Workspace name or path
+        graph_json: the graph document as a JSON string
+        mode: merge (add/overwrite by id) or replace (clear first)
+    """
+    from epist import graph_io
+    s = _get_store(workspace)
+    if not s.is_git_repo():
+        s.git_init()
+    try:
+        data = json.loads(graph_json)
+    except json.JSONDecodeError as e:
+        return f"Error: invalid JSON: {e}"
+    try:
+        summary = graph_io.import_graph(s, data, mode=mode)
+    except ValueError as e:
+        return f"Error: {e}"
+    s.git_commit(f"[manual] Import graph ({summary.get('mode')}, mode={mode})")
+    parts = ", ".join(f"{k}: {v}" for k, v in summary.items() if k != "mode")
+    return f"Imported ({summary.get('mode')} shape, {mode}) — {parts}"
+
+
 # ── Fork-and-merge tools ─────────────────────────────────────────────
 
 import re as _re
