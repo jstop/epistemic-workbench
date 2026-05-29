@@ -101,6 +101,18 @@ def add_argument(store, conclusion_id, premise_ids, pattern="modus_ponens",
     return a
 
 
+def set_support_mode(store, argument_id, mode):
+    """Set how an argument combines its premises (drives F3 propagation)."""
+    if mode not in SUPPORT_MODES:
+        raise ValueError(f"support_mode must be one of {sorted(SUPPORT_MODES)}, got {mode!r}")
+    arg = store.get(argument_id)
+    if not arg or not hasattr(arg, "support_mode"):
+        raise ValueError(f"argument not found: {argument_id}")
+    arg.support_mode = mode
+    store.save()
+    return arg
+
+
 def link(store, from_id, to_id, relation):
     """Create a typed edge between two objects, maintaining engine-visible
     constructs for the relations the ATMS already understands. Returns the Edge.

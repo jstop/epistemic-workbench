@@ -400,9 +400,13 @@ def compute_summary(store, thesis_id=None) -> dict:
     conceded_defeaters = sum(1 for d in all_defeaters if d["status"] == "conceded")
 
     from epist.provenance import provenance_counts
+    from epist.engine import propagate_confidence, conjunction_report
     prov_counts = provenance_counts(store)
+    derived = propagate_confidence(store, atms)
+    conj_note = conjunction_report(store, thesis_id, atms)
     assessment = {
         "thesis_confidence": thesis.confidence.level,
+        "derived_confidence": derived.get(thesis_id, thesis.confidence.level),
         "average_argument_strength": sum(arg_confidences) / len(arg_confidences) if arg_confidences else 0,
         "claims_supported": f"{claims_with_support}/{len(claims_in_subgraph)}",
         "active_defeaters": active_defeaters,
@@ -410,6 +414,7 @@ def compute_summary(store, thesis_id=None) -> dict:
         "atms_status": atms.get(thesis_id, "unknown"),
         "evidence_recorded": prov_counts["recorded"],
         "evidence_asserted": prov_counts["asserted"],
+        "conjunction": conj_note,
     }
 
     # Build markdown
@@ -503,9 +508,25 @@ def compute_summary(store, thesis_id=None) -> dict:
             md.append(f"- If {d['description'].lower()}")
         md.append("")
 
+    conj = assessment.get("conjunction")
+    if conj:
+        weak = " and ".join(
+            f"'{w['label']}' ({w['confidence']:.0%})" for w in conj["weakest_links"]
+        )
+        md.append("## ⚠ Conjunction Warning")
+        md.append("")
+        md.append(
+            f"The thesis is supported by a **{conj['support_mode']}** argument over "
+            f"**{conj['n_premises']} all-required premises**. The honest confidence is "
+            f"their **product = {conj['product']:.0%}** (gated by the two weakest links: "
+            f"{weak}), not the average of {conj['average']:.0%}."
+        )
+        md.append("")
+
     md.append("## Confidence Assessment")
     md.append("")
-    md.append(f"- **Thesis confidence:** {assessment['thesis_confidence']:.0%}")
+    md.append(f"- **Thesis confidence (stored):** {assessment['thesis_confidence']:.0%}")
+    md.append(f"- **Derived confidence (propagated):** {assessment['derived_confidence']:.0%}")
     md.append(f"- **Average argument strength:** {assessment['average_argument_strength']:.0%}")
     md.append(f"- **Claims with support:** {assessment['claims_supported']}")
     md.append(f"- **Active defeaters:** {assessment['active_defeaters']}")

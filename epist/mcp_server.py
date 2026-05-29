@@ -962,6 +962,34 @@ async def link(workspace: str, from_id: str, to_id: str, relation: str) -> str:
 
 @mcp.tool()
 @_log_tool
+async def set_support_mode(workspace: str, argument_id: str, mode: str) -> str:
+    """Set how an argument combines its premises (F3 confidence propagation).
+
+    mode = conjunctive (all required — product) | disjunctive (alternatives — max)
+    | independent (each lends support — noisy-OR). Conjunctive is the honest
+    default for an all-required multi-premise argument.
+
+    Args:
+        workspace: Workspace name or path
+        argument_id: id (or prefix) of the argument
+        mode: conjunctive | disjunctive | independent
+    """
+    from epist import graph_io
+    s = _get_store(workspace)
+    try:
+        a = graph_io.set_support_mode(s, argument_id, mode)
+    except ValueError as e:
+        return f"Error: {e}"
+    if s.is_git_repo():
+        s.git_commit(f"[manual] Set support_mode={mode} on {argument_id[:12]}")
+    from epist.engine import propagate_confidence
+    derived = propagate_confidence(s)
+    return (f"Argument `{a.id[:16]}` support_mode = **{mode}**.\n"
+            f"Conclusion derived confidence is now {derived.get(a.conclusion, 0):.0%}.")
+
+
+@mcp.tool()
+@_log_tool
 async def export_graph(workspace: str) -> str:
     """Export the whole workspace graph as JSON (lossless).
 

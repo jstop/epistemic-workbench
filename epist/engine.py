@@ -236,6 +236,155 @@ def check_coherence(store):
     return issues
 
 
+# ── Confidence propagation (F3) ───────────────────────────────────────
+#
+# The engine historically did NOT propagate confidence: a claim's level was a
+# stored number and the only aggregate was the *average* of argument strengths
+# (overstating a conjunction badly — the ~62% vs ~7% bug). This pass computes a
+# DERIVED confidence bottom-up so a multi-premise, all-required argument is
+# scored by the conjunction of its premises, not their average.
+#
+# Combination per argument support_mode (over premise DERIVED confidences):
+#   conjunctive  → product   (all premises required; the honest AND)
+#   disjunctive  → max       (premises are alternatives; any one suffices)
+#   independent  → noisy-OR  (each premise independently lends support)
+# A single-premise argument is identical under every mode.
+# The argument's own `confidence` scales the result (inferential strength).
+# An ATMS-defeated argument contributes 0 (its support is broken).
+# A claim with multiple supporting arguments combines them by noisy-OR
+# (independent lines of support). A claim with no supporting argument keeps its
+# stored confidence (it is a leaf / assumption / premise).
+
+
+def _product(xs):
+    p = 1.0
+    for x in xs:
+        p *= x
+    return p
+
+
+def _noisy_or(xs):
+    """Probabilistic OR: 1 - ∏(1 - x). 0 for empty."""
+    q = 1.0
+    for x in xs:
+        q *= (1.0 - x)
+    return 1.0 - q
+
+
+def _combine_premises(values, mode):
+    if not values:
+        return 0.0
+    if mode == "disjunctive":
+        return max(values)
+    if mode == "independent":
+        return _noisy_or(values)
+    # default + "conjunctive": product (the all-required AND)
+    return _product(values)
+
+
+def _stored_conf(obj):
+    if hasattr(obj, "confidence"):
+        return obj.confidence.level
+    return getattr(obj, "reliability", 1.0)
+
+
+def propagate_confidence(store, atms=None):
+    """Return {object_id: derived_confidence} computed bottom-up.
+
+    Pure: never mutates the store. Cycle-safe (a node currently being computed
+    falls back to its stored confidence to break the loop)."""
+    if atms is None:
+        atms = compute_atms(store)
+
+    supports = {}  # conclusion_id -> [arguments]
+    for a in store.arguments.values():
+        supports.setdefault(a.conclusion, []).append(a)
+
+    derived = {}
+    in_progress = set()
+
+    def conf(oid):
+        if oid in derived:
+            return derived[oid]
+        obj = store.get(oid)
+        if obj is None:
+            return 0.0
+        # Evidence and unsupported claims are leaves → stored value.
+        args = supports.get(oid, [])
+        if not args or oid in store.evidence:
+            return _stored_conf(obj)
+        if oid in in_progress:
+            return _stored_conf(obj)  # cycle guard
+        in_progress.add(oid)
+
+        arg_contributions = []
+        for a in args:
+            if atms.get(a.id) == ATMSStatus.DEFEATED:
+                arg_contributions.append(0.0)
+                continue
+            premise_vals = [conf(pid) for pid in a.premises]
+            mode = getattr(a, "support_mode", "independent")
+            combined = _combine_premises(premise_vals, mode)
+            arg_contributions.append(a.confidence.level * combined)
+
+        in_progress.discard(oid)
+        # Multiple supporting arguments are independent lines of support.
+        result = _noisy_or(arg_contributions) if arg_contributions else _stored_conf(obj)
+        derived[oid] = result
+        return result
+
+    for cid in store.claims:
+        conf(cid)
+    return derived
+
+
+def conjunction_report(store, claim_id, atms=None):
+    """Explain a claim's derived confidence vs its averaged display value.
+
+    Returns a dict suitable for a summary note, or None if the claim has no
+    multi-premise conjunctive support worth warning about."""
+    if atms is None:
+        atms = compute_atms(store)
+    derived = propagate_confidence(store, atms)
+
+    args = [a for a in store.arguments.values() if a.conclusion == claim_id]
+    if not args:
+        return None
+
+    # Focus on the conjunctive, multi-premise supporters — the overstatement risk.
+    conj = [a for a in args
+            if getattr(a, "support_mode", "independent") != "disjunctive"
+            and len(a.premises) >= 2]
+    if not conj:
+        return None
+
+    # Pick the dominant supporting argument (most premises) for the note.
+    arg = max(conj, key=lambda a: len(a.premises))
+    premises = []
+    for pid in arg.premises:
+        p = store.get(pid)
+        if not p:
+            continue
+        label = (f"{p.subject} {p.predicate} {p.object}" if hasattr(p, "subject")
+                 else getattr(p, "title", pid[:12]))
+        premises.append({"id": pid, "label": label, "confidence": derived.get(pid, _stored_conf(p))})
+    premises_sorted = sorted(premises, key=lambda x: x["confidence"])
+    weakest = premises_sorted[:2]
+
+    product = _product([pp["confidence"] for pp in premises])
+    average = sum(pp["confidence"] for pp in premises) / len(premises) if premises else 0.0
+
+    return {
+        "claim_id": claim_id,
+        "n_premises": len(premises),
+        "product": product,
+        "average": average,
+        "derived": derived.get(claim_id, 0.0),
+        "weakest_links": weakest,
+        "support_mode": getattr(arg, "support_mode", "independent"),
+    }
+
+
 # ── Bayesian Update ───────────────────────────────────────────────────
 
 def bayesian_update(prior, likelihood_if_true, likelihood_if_false):
