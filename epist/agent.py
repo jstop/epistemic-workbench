@@ -93,14 +93,21 @@ def _make_generate_tools(store):
         },
     )
     async def create_evidence(args):
-        e = store.add_evidence(Evidence(
+        # F2: evidence produced by generation is LLM-asserted, not consulted.
+        # Mark it asserted (unverified) regardless of how authoritative the
+        # `source` string looks — a citation string is not provenance.
+        e = Evidence(
             title=args["title"],
             description=args["description"],
             evidence_type=EvidenceType(args.get("evidence_type", "observation")),
             source=args.get("source", ""),
             reliability=args.get("reliability", 0.7),
-        ))
-        return {"content": [{"type": "text", "text": f"evidence_id={e.id}\ntitle={e.title}"}]}
+        )
+        from epist.provenance import mark_asserted
+        mark_asserted(e, recall_text=f"{e.title} — {e.description}"[:500])
+        store.add_evidence(e)
+        return {"content": [{"type": "text",
+                             "text": f"evidence_id={e.id}\ntitle={e.title}\nprovenance=asserted (unverified)"}]}
 
     @tool(
         "create_argument",
@@ -217,6 +224,13 @@ Guidelines:
 - Inference patterns: abduction, induction, modus_ponens, analogy, causal, testimony
 - Defeater types: rebutting, undercutting, undermining
 - Be intellectually honest — include real weaknesses
+
+PROVENANCE HONESTY (critical): the `source` field on evidence is a description, \
+NOT a verified citation. Do NOT fabricate specific citations (paper titles, \
+standards numbers, author/year) for sources you did not actually consult. All \
+evidence you create is recorded as ASSERTED (unverified) — a real source must be \
+attached afterwards via attach_source. Prefer describing the kind of evidence \
+that would support a claim over inventing a precise-looking citation.
 """
 
 

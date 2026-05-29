@@ -209,6 +209,11 @@ class Evidence:
     evidence_type: EvidenceType = EvidenceType.OBSERVATION
     source: str = ""
     reliability: float = 0.7
+    # F2 — provenance. None or {"kind":"asserted"} means UNVERIFIED (LLM-asserted
+    # or hand-typed): a `source` string here is NOT proof of provenance. Only
+    # {"kind":"recorded", "source_id": <recall id>, ...} is backed by a real
+    # recorded source. The `source` string alone never makes evidence recorded.
+    provenance: Optional[dict] = None
     identity: Identity = field(default_factory=Identity)
     notes: str = ""
     created_at: float = field(default_factory=time.time)

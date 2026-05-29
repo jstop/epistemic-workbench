@@ -81,7 +81,7 @@ Return a JSON object with exactly this structure:
 
 Rules:
 - Generate 3-5 supporting claims that decompose the thesis
-- Generate 2-4 pieces of evidence (real or plausible) supporting the claims
+- Generate 2-4 pieces of evidence supporting the claims. The `source` field is a DESCRIPTION, not a verified citation — do NOT invent specific paper titles, standards numbers, or author/year citations you did not actually consult. All generated evidence is recorded as ASSERTED (unverified) until a real source is attached.
 - Generate arguments linking evidence and claims to the thesis
 - CRITICAL: The thesis is the single root. Every claim must connect back to the thesis through argument chains. Do NOT create orphan sub-claims with no path to the thesis.
 - Create at least one argument with conclusion_ref "thesis" that uses claims as premises, forming a converging tree
@@ -195,14 +195,18 @@ def generate_full_graph(store, thesis_text: str) -> str:
         ))
         created_ids[f"claim_{i}"] = claim.id
 
-    # 3. Create evidence
+    # 3. Create evidence — F2: generated evidence is asserted (unverified),
+    #    never recorded, no matter how authoritative the source string looks.
+    from epist.provenance import mark_asserted
     for i, e in enumerate(data.get("evidence", [])):
-        ev = store.add_evidence(Evidence(
+        ev = Evidence(
             title=e["title"], description=e["description"],
             evidence_type=EvidenceType(e.get("evidence_type", "observation")),
             source=e.get("source", ""),
             reliability=e.get("reliability", 0.7),
-        ))
+        )
+        mark_asserted(ev, recall_text=f"{ev.title} — {ev.description}"[:500])
+        store.add_evidence(ev)
         created_ids[f"evidence_{i}"] = ev.id
 
     # 4. Create arguments
@@ -343,12 +347,14 @@ def compute_summary(store, thesis_id=None) -> dict:
             for pid in a.premises:
                 p = store.get(pid)
                 if p:
+                    from epist.provenance import provenance_kind
                     premises.append({
                         "id": pid,
                         "type": type(p).__name__.lower(),
                         "label": f"{p.subject} {p.predicate} {p.object}" if hasattr(p, "subject") else getattr(p, "title", pid[:12]),
                         "confidence": p.confidence.level if hasattr(p, "confidence") else getattr(p, "reliability", None),
                         "notes": getattr(p, "notes", "") or getattr(p, "description", ""),
+                        "provenance": provenance_kind(p) if not hasattr(p, "subject") else None,
                     })
             supporting.append({
                 "id": aid,
@@ -393,6 +399,8 @@ def compute_summary(store, thesis_id=None) -> dict:
     active_defeaters = sum(1 for d in all_defeaters if d["status"] == "active")
     conceded_defeaters = sum(1 for d in all_defeaters if d["status"] == "conceded")
 
+    from epist.provenance import provenance_counts
+    prov_counts = provenance_counts(store)
     assessment = {
         "thesis_confidence": thesis.confidence.level,
         "average_argument_strength": sum(arg_confidences) / len(arg_confidences) if arg_confidences else 0,
@@ -400,6 +408,8 @@ def compute_summary(store, thesis_id=None) -> dict:
         "active_defeaters": active_defeaters,
         "conceded_defeaters": conceded_defeaters,
         "atms_status": atms.get(thesis_id, "unknown"),
+        "evidence_recorded": prov_counts["recorded"],
+        "evidence_asserted": prov_counts["asserted"],
     }
 
     # Build markdown
@@ -420,7 +430,13 @@ def compute_summary(store, thesis_id=None) -> dict:
             md.append("")
             for p in arg["premises"]:
                 conf_str = f" ({p['confidence']:.0%})" if p["confidence"] is not None else ""
-                md.append(f"- **{p['type'].title()}:** {p['label']}{conf_str}")
+                prov = p.get("provenance")
+                prov_flag = ""
+                if prov == "asserted":
+                    prov_flag = " **[ASSERTED — unverified]**"
+                elif prov == "recorded":
+                    prov_flag = " *[recorded]*"
+                md.append(f"- **{p['type'].title()}:** {p['label']}{conf_str}{prov_flag}")
                 if p["notes"]:
                     md.append(f"  - {p['notes']}")
             if arg["defeaters"]:
@@ -496,6 +512,11 @@ def compute_summary(store, thesis_id=None) -> dict:
     if assessment.get("conceded_defeaters"):
         md.append(f"- **Conceded defeaters:** {assessment['conceded_defeaters']}")
     md.append(f"- **Overall status:** {assessment['atms_status']}")
+    if assessment.get("evidence_asserted") or assessment.get("evidence_recorded"):
+        md.append(
+            f"- **Evidence provenance:** {assessment.get('evidence_recorded', 0)} recorded, "
+            f"{assessment.get('evidence_asserted', 0)} **asserted (unverified)**"
+        )
 
     return {
         "thesis": {

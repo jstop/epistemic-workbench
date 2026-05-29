@@ -64,6 +64,7 @@ def _deserialize_evidence(d):
         evidence_type=EvidenceType(d.get("evidence_type", "observation")),
         source=d.get("source", ""),
         reliability=d.get("reliability", 0.7),
+        provenance=d.get("provenance", None),
         identity=Identity(**d.get("identity", {})) if isinstance(d.get("identity"), dict) else Identity(),
         notes=d.get("notes", ""),
         created_at=d.get("created_at", 0),

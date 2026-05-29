@@ -845,7 +845,10 @@ async def show_graph(workspace: str) -> str:
                         lines.append(f"{prefix}        ID: `{pid[:16]}`")
                         render_node(pid, indent + 2, visited)
                     else:
-                        lines.append(f"{prefix}    [{status_icon(p_st)}] Evidence: {p.title} ({p.reliability:.0%}) src={p.source or '(none)'}")
+                        from epist.provenance import provenance_kind
+                        prov = provenance_kind(p)
+                        prov_flag = "[recorded]" if prov == "recorded" else "[ASSERTED — unverified]"
+                        lines.append(f"{prefix}    [{status_icon(p_st)}] Evidence {prov_flag}: {p.title} ({p.reliability:.0%}) src={p.source or '(none)'}")
                         lines.append(f"{prefix}        ID: `{pid[:16]}`")
 
     render_node(thesis.id)
@@ -998,6 +1001,69 @@ async def import_graph(workspace: str, graph_json: str, mode: str = "merge") -> 
     s.git_commit(f"[manual] Import graph ({summary.get('mode')}, mode={mode})")
     parts = ", ".join(f"{k}: {v}" for k, v in summary.items() if k != "mode")
     return f"Imported ({summary.get('mode')} shape, {mode}) — {parts}"
+
+
+# ── F2: provenance (recall integration) ───────────────────────────────
+
+@mcp.tool()
+@_log_tool
+async def attach_source(workspace: str, node_id: str, source_id: int = 0,
+                        url: str = "", quote: str = "",
+                        source_type: str = "document") -> str:
+    """Attach a REAL source to an evidence node, flipping it from asserted to recorded.
+
+    Provide EITHER a recall source_id (from recall.record_source) OR an explicit
+    url (+ optional quote), which is registered in recall to earn a source id.
+    If recall is unreachable or the source_id doesn't exist, the node stays
+    'asserted' — recorded provenance is never faked.
+
+    Args:
+        workspace: Workspace name or path
+        node_id: id (or prefix) of the evidence node
+        source_id: a recall source_record id (omit/0 to use url instead)
+        url: source URL (used when no source_id is given)
+        quote: optional supporting quote from the source
+        source_type: recall source type for a url (document, web_fetch, …)
+    """
+    from epist import provenance
+    s = _get_store(workspace)
+    result = provenance.attach_source(
+        s, node_id,
+        source_id=(source_id or None),
+        url=(url or None),
+        quote=(quote or None),
+        source_type=source_type,
+    )
+    if result.get("ok"):
+        if s.is_git_repo():
+            s.git_commit(f"[manual] Attach source to evidence {node_id[:12]}")
+        return (f"Evidence `{node_id[:16]}` is now **recorded** "
+                f"(recall source_id={result['source_id']}).")
+    return f"Not recorded — {result.get('reason', 'unknown error')}"
+
+
+@mcp.tool()
+@_log_tool
+async def list_unsourced(workspace: str) -> str:
+    """List evidence nodes lacking a recorded source (the asserted/unverified ones).
+
+    Mirrors recall.list_orphan_derivations — the anti-confabulation view.
+
+    Args:
+        workspace: Workspace name or path
+    """
+    from epist import provenance
+    s = _get_store(workspace)
+    rows = provenance.list_unsourced(s)
+    counts = provenance.provenance_counts(s)
+    if not rows:
+        return (f"All {counts['total']} evidence nodes are recorded "
+                f"(no unsourced/asserted evidence).")
+    lines = [f"**{len(rows)} asserted (unverified) of {counts['total']} evidence nodes:**\n"]
+    for r in rows:
+        lines.append(f"- `{r['id'][:16]}` **{r['title']}** — src string: {r['source']}")
+    lines.append("\nUse attach_source to flip any of these to recorded against a real source.")
+    return "\n".join(lines)
 
 
 # ── Fork-and-merge tools ─────────────────────────────────────────────
