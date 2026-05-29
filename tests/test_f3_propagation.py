@@ -170,6 +170,57 @@ def test_answered_objection_does_not_bind(tmp_path):
     assert _approx(propagate_confidence(s)[t.id], before)
 
 
+def test_summary_thesis_selection_is_deterministic(tmp_path):
+    """Regression (Desktop): compute_summary without a thesis_id must pick the
+    same node every run. The osmio import has an explicit thesis (I_claim); a
+    hash-order-dependent max() over a set previously mis-picked it (45%/5%)."""
+    import json
+    from pathlib import Path
+    from epist.graph_io import import_graph
+    from epist.llm import compute_summary
+    fixture = Path(__file__).resolve().parent.parent / "osmio_argument_graph.json"
+    if not fixture.exists():
+        pytest.skip("osmio fixture not present")
+    g = json.loads(fixture.read_text())
+    picks = set()
+    for i in range(5):
+        s = Store(tmp_path / f"ws{i}")
+        import_graph(s, g, mode="replace")
+        picks.add(compute_summary(s)["thesis"]["id"])
+    assert picks == {"I_claim"}, f"nondeterministic thesis pick: {picks}"
+
+
+def test_confidence_gap_report_names_binding_objections(tmp_path):
+    """The objection-driven drag (osmio's real story) is surfaced with the
+    binding objections named — not silently absent because there's no
+    multi-premise conjunctive argument."""
+    import json
+    from pathlib import Path
+    from epist.graph_io import import_graph
+    from epist.engine import confidence_gap_report
+    fixture = Path(__file__).resolve().parent.parent / "osmio_argument_graph.json"
+    if not fixture.exists():
+        pytest.skip("osmio fixture not present")
+    s = Store(tmp_path / "ws")
+    import_graph(s, json.loads(fixture.read_text()), mode="replace")
+    rep = confidence_gap_report(s, "I_claim")
+    assert rep is not None
+    assert rep["stored"] - rep["derived"] >= 0.15
+    assert len(rep["binding_objections"]) == 2  # O_network, O_conjunction
+    assert {o["id"] for o in rep["binding_objections"]} == {"O_network", "O_conjunction"}
+
+
+def test_confidence_gap_none_when_no_gap(tmp_path):
+    """No spurious gap warning when derived ≈ stored."""
+    from epist.graph_io import add_claim, link
+    from epist.engine import confidence_gap_report
+    s = Store(tmp_path / "ws")
+    t = add_claim(s, "t", node_type="thesis", confidence=0.8)
+    p = add_claim(s, "p", confidence=0.85)
+    link(s, p.id, t.id, "supports")
+    assert confidence_gap_report(s, t.id) is None
+
+
 def test_conjunction_report_names_weakest_links(tmp_path):
     s = Store(tmp_path / "ws")
     t = add_claim(s, "t", node_type="thesis", confidence=0.62)

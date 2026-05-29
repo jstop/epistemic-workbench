@@ -296,23 +296,35 @@ def compute_summary(store, thesis_id=None) -> dict:
 
     atms = compute_atms(store)
 
-    # Use provided thesis_id or find root thesis
+    # Use provided thesis_id or find root thesis.
     if thesis_id and thesis_id in store.claims:
         thesis = store.claims[thesis_id]
     else:
-        premise_ids = set()
-        support_count = {}
-        for a in store.arguments.values():
-            support_count[a.conclusion] = support_count.get(a.conclusion, 0) + 1
-            for pid in a.premises:
-                premise_ids.add(pid)
-        root_ids = set(support_count.keys()) - premise_ids
-        if root_ids:
-            thesis_id = max(root_ids, key=lambda cid: support_count.get(cid, 0))
-        elif support_count:
-            thesis_id = max(support_count, key=support_count.get)
+        # Prefer an explicitly-marked thesis: is_root, or node_type=="thesis".
+        # Authoritative for authored/imported graphs; avoids the topological
+        # guess. Everything is sorted so the choice is deterministic — a bare
+        # set + max() is hash-order dependent, so the same workspace could
+        # summarize a different node each run (the osmio 45%/5% mis-pick).
+        explicit = sorted(
+            cid for cid, c in store.claims.items()
+            if getattr(c, "is_root", False) or getattr(c, "node_type", "") == "thesis"
+        )
+        if explicit:
+            thesis_id = explicit[0]
         else:
-            thesis_id = next(iter(store.claims))
+            premise_ids = set()
+            support_count = {}
+            for a in store.arguments.values():
+                support_count[a.conclusion] = support_count.get(a.conclusion, 0) + 1
+                for pid in a.premises:
+                    premise_ids.add(pid)
+            root_ids = set(support_count.keys()) - premise_ids
+            if root_ids:
+                thesis_id = max(sorted(root_ids), key=lambda cid: support_count.get(cid, 0))
+            elif support_count:
+                thesis_id = max(sorted(support_count), key=support_count.get)
+            else:
+                thesis_id = sorted(store.claims)[0]
         thesis = store.claims.get(thesis_id)
         if not thesis:
             thesis_id = next(iter(store.claims))
@@ -400,10 +412,11 @@ def compute_summary(store, thesis_id=None) -> dict:
     conceded_defeaters = sum(1 for d in all_defeaters if d["status"] == "conceded")
 
     from epist.provenance import provenance_counts
-    from epist.engine import propagate_confidence, conjunction_report
+    from epist.engine import propagate_confidence, conjunction_report, confidence_gap_report
     prov_counts = provenance_counts(store)
     derived = propagate_confidence(store, atms)
     conj_note = conjunction_report(store, thesis_id, atms)
+    gap_note = confidence_gap_report(store, thesis_id, atms)
     assessment = {
         "thesis_confidence": thesis.confidence.level,
         "derived_confidence": derived.get(thesis_id, thesis.confidence.level),
@@ -415,6 +428,7 @@ def compute_summary(store, thesis_id=None) -> dict:
         "evidence_recorded": prov_counts["recorded"],
         "evidence_asserted": prov_counts["asserted"],
         "conjunction": conj_note,
+        "confidence_gap": gap_note,
     }
 
     # Build markdown
@@ -521,6 +535,22 @@ def compute_summary(store, thesis_id=None) -> dict:
             f"(premises only, before objections) = {conj['product']:.0%}** — gated by the "
             f"two weakest links: {weak} — not the average of {conj['average']:.0%}. "
             f"(See the advisory derived estimate below for the figure after objections.)"
+        )
+        md.append("")
+
+    gap = assessment.get("confidence_gap")
+    if gap and gap.get("binding_objections"):
+        objs = "; ".join(
+            f"{o['label']} ({o['rel']}, {o['strength']:.0%})"
+            for o in gap["binding_objections"]
+        )
+        md.append("## ⚠ Confidence Gap")
+        md.append("")
+        md.append(
+            f"The advisory derived estimate (**{gap['derived']:.0%}**) is well below the "
+            f"stored confidence of record (**{gap['stored']:.0%}**), because "
+            f"**{len(gap['binding_objections'])} standing objection(s)** bind on the thesis: "
+            f"{objs}. The headline number does not reflect these unless it is lowered to match."
         )
         md.append("")
 

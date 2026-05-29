@@ -453,6 +453,45 @@ def conjunction_report(store, claim_id, atms=None):
     }
 
 
+def confidence_gap_report(store, claim_id, atms=None, threshold=0.15):
+    """Explain WHY a claim's derived (propagated) confidence is materially below
+    its stored value — naming the standing objections that bind on it.
+
+    Unlike conjunction_report (which fires only for a multi-premise conjunctive
+    *argument*), this covers the common authored/imported case where the drag is
+    objection-driven: a thesis with many parallel supports but live refutes/rebuts
+    edges (osmio). Returns a dict or None if the gap is below `threshold`. Honest
+    about cause: it reports the binding objections, not a premise product that
+    isn't there."""
+    if atms is None:
+        atms = compute_atms(store)
+    derived = propagate_confidence(store, atms)
+    claim = store.claims.get(claim_id)
+    if claim is None:
+        return None
+    stored = claim.confidence.level
+    derived_c = derived.get(claim_id, stored)
+    if stored - derived_c < threshold:
+        return None
+
+    binding = []
+    for e in getattr(store, "edges", {}).values():
+        if e.to == claim_id and e.rel in OBJECTION_RELS and _objection_stands(store, atms, e.from_id):
+            src = store.get(e.from_id)
+            label = ((getattr(src, "notes", "") or
+                      f"{getattr(src, 'subject', '')} {getattr(src, 'predicate', '')} "
+                      f"{getattr(src, 'object', '')}").strip() if src else e.from_id)
+            binding.append({"id": e.from_id, "rel": e.rel,
+                            "label": label[:80], "strength": derived.get(e.from_id, 0.0)})
+    binding.sort(key=lambda b: b["strength"], reverse=True)
+    return {
+        "claim_id": claim_id,
+        "stored": stored,
+        "derived": derived_c,
+        "binding_objections": binding,
+    }
+
+
 # ── Bayesian Update ───────────────────────────────────────────────────
 
 def bayesian_update(prior, likelihood_if_true, likelihood_if_false):
