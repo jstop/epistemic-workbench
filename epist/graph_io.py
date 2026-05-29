@@ -216,8 +216,11 @@ def _apply_edge_side_effects(store, src, dst, rel):
         supporting = [a for a in store.arguments.values() if a.conclusion == dst.id]
         if supporting:
             target = max(supporting, key=lambda a: a.confidence.level)
+            # Tag with "[edge:...]" so the derived-confidence pass recognizes this
+            # defeater as the mirror of an objection edge and counts the objection
+            # once (via the edge channel), not twice.
             target.defeaters.append(Defeater(
-                type=dtype, description=f"{rel}: {_short(src)}", status=status,
+                type=dtype, description=f"[edge:{rel}] {_short(src)}", status=status,
             ))
         # If dst has no supporting argument, the edge alone records the objection.
     elif rel == "supersedes":

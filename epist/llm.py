@@ -516,17 +516,22 @@ def compute_summary(store, thesis_id=None) -> dict:
         md.append("## ⚠ Conjunction Warning")
         md.append("")
         md.append(
-            f"The thesis is supported by a **{conj['support_mode']}** argument over "
-            f"**{conj['n_premises']} all-required premises**. The honest confidence is "
-            f"their **product = {conj['product']:.0%}** (gated by the two weakest links: "
-            f"{weak}), not the average of {conj['average']:.0%}."
+            f"The thesis rests on a **{conj['support_mode']}** argument over "
+            f"**{conj['n_premises']} all-required premises**. Their **product "
+            f"(premises only, before objections) = {conj['product']:.0%}** — gated by the "
+            f"two weakest links: {weak} — not the average of {conj['average']:.0%}. "
+            f"(See the advisory derived estimate below for the figure after objections.)"
         )
         md.append("")
 
     md.append("## Confidence Assessment")
     md.append("")
-    md.append(f"- **Thesis confidence (stored):** {assessment['thesis_confidence']:.0%}")
-    md.append(f"- **Derived confidence (propagated):** {assessment['derived_confidence']:.0%}")
+    md.append(f"- **Thesis confidence (of record):** {assessment['thesis_confidence']:.0%}")
+    md.append(
+        f"- **Derived estimate (advisory, experimental):** "
+        f"{assessment['derived_confidence']:.0%} — propagated bottom-up "
+        f"(support × objections); a diagnostic, not authoritative"
+    )
     md.append(f"- **Average argument strength:** {assessment['average_argument_strength']:.0%}")
     md.append(f"- **Claims with support:** {assessment['claims_supported']}")
     md.append(f"- **Active defeaters:** {assessment['active_defeaters']}")

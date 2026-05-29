@@ -86,17 +86,21 @@ def test_multiple_arguments_combine_noisy_or(tmp_path):
 
 def test_defeated_argument_contributes_zero(tmp_path):
     from epist.model import Defeater, DefeaterType, DefeaterStatus
+    from epist.engine import DEFAULT_OBJECTION_STRENGTH
     s = Store(tmp_path / "ws")
     t = add_claim(s, "t", node_type="thesis", confidence=0.5)
     p = add_claim(s, "p", confidence=0.9)
     arg = add_argument(s, t.id, [p.id], confidence=1.0)
-    # attach an active defeater → ATMS defeats the argument
+    base = propagate_confidence(s)[t.id]  # 0.9, no objection yet
+    # A manual (non-edge) active defeater reduces the conclusion by the default
+    # objection strength — once. The premise itself is not defeated, so the
+    # support strand is intact; the penalty comes through the objection channel.
     s.arguments[arg.id].defeaters.append(
         Defeater(type=DefeaterType.REBUTTING, description="x", status=DefeaterStatus.ACTIVE))
     s.save()
     d = propagate_confidence(s)
-    # sole support defeated → derived falls back to stored (no live support)
-    assert d[t.id] == 0.0 or _approx(d[t.id], 0.5)
+    assert _approx(base, 0.9)
+    assert _approx(d[t.id], 0.9 * (1 - DEFAULT_OBJECTION_STRENGTH))  # 0.27
 
 
 def test_cycle_does_not_hang(tmp_path):
@@ -107,6 +111,63 @@ def test_cycle_does_not_hang(tmp_path):
     add_argument(s, b.id, [a.id], confidence=1.0)
     d = propagate_confidence(s)  # must terminate
     assert a.id in d and b.id in d
+
+
+def test_osmio_thesis_not_inflated_by_parallel_supports(tmp_path):
+    """Regression (Desktop session): the osmio thesis has 7 parallel `supports`
+    edges and several `refutes` objections. It must NOT noisy-OR up toward 1.0 —
+    objections bind on the conclusion. Honest target is low (a conceded five-link
+    conjunction)."""
+    import json
+    from pathlib import Path
+    from epist.graph_io import import_graph
+    fixture = Path(__file__).resolve().parent.parent / "osmio_argument_graph.json"
+    if not fixture.exists():
+        pytest.skip("osmio fixture not present")
+    s = Store(tmp_path / "ws")
+    import_graph(s, json.loads(fixture.read_text()), mode="replace")
+    derived = propagate_confidence(s)
+    assert derived["I_claim"] < 0.20, f"thesis inflated to {derived['I_claim']:.2%}"
+
+
+def test_objection_not_double_counted(tmp_path):
+    """Regression: a refutes edge must reduce the conclusion exactly once, not
+    both via its synthesized ATMS defeater AND via the objection factor."""
+    from epist.graph_io import add_claim, link
+    s = Store(tmp_path / "ws")
+    t = add_claim(s, "t", node_type="thesis")
+    p = add_claim(s, "p", confidence=0.8)
+    link(s, p.id, t.id, "supports")
+    base = propagate_confidence(s)[t.id]            # 0.8 (arg) × 0.8 (premise)
+    o = add_claim(s, "o", node_type="objection", confidence=0.7)
+    link(s, o.id, t.id, "refutes")
+    after = propagate_confidence(s)[t.id]
+    assert _approx(after, base * (1 - 0.7))         # single penalty, not zeroed
+    assert after > 0.0
+
+
+def test_narrows_does_not_penalize(tmp_path):
+    from epist.graph_io import add_claim, link
+    s = Store(tmp_path / "ws")
+    t = add_claim(s, "t", node_type="thesis")
+    p = add_claim(s, "p", confidence=0.8)
+    link(s, p.id, t.id, "supports")
+    before = propagate_confidence(s)[t.id]
+    n = add_claim(s, "n", node_type="objection", confidence=0.9)
+    link(s, n.id, t.id, "narrows")
+    assert _approx(propagate_confidence(s)[t.id], before)
+
+
+def test_answered_objection_does_not_bind(tmp_path):
+    from epist.graph_io import add_claim, link
+    s = Store(tmp_path / "ws")
+    t = add_claim(s, "t", node_type="thesis")
+    p = add_claim(s, "p", confidence=0.8)
+    link(s, p.id, t.id, "supports")
+    before = propagate_confidence(s)[t.id]
+    o = add_claim(s, "o", node_type="objection", confidence=0.7, status="rebutted")
+    link(s, o.id, t.id, "refutes")
+    assert _approx(propagate_confidence(s)[t.id], before)
 
 
 def test_conjunction_report_names_weakest_links(tmp_path):

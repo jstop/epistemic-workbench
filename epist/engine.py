@@ -254,6 +254,42 @@ def check_coherence(store):
 # A claim with multiple supporting arguments combines them by noisy-OR
 # (independent lines of support). A claim with no supporting argument keeps its
 # stored confidence (it is a leaf / assumption / premise).
+#
+# OBJECTIONS BIND ON THE CONCLUSION. Support alone is not the whole story: a
+# claim targeted by `refutes`/`rebuts` edges in the generic edge layer has its
+# derived confidence pulled DOWN multiplicatively —
+#   derived(C) = support_term(C) × ∏ over objections O→C of (1 - derived(O))
+# Without this, a multiply-supported thesis noisy-ORs up toward 1.0 while its
+# objections (each only able to defeat one parallel support via ATMS) barely
+# register — the 97%-with-five-live-defeaters bug. `narrows` is deliberately
+# EXCLUDED: it qualifies a thesis's scope, it does not reduce its truth-
+# confidence, so it is surfaced as a scope note, not a numeric penalty.
+
+# Generic-edge relations that reduce a target claim's derived confidence.
+OBJECTION_RELS = {"refutes", "rebuts"}
+
+# Embedded defeaters synthesized from an objection edge are tagged with this
+# prefix (see graph_io._apply_edge_side_effects) so the derived pass counts the
+# objection once — via the edge — instead of double-counting the mirror.
+EDGE_DEFEATER_PREFIX = "[edge:"
+
+# Embedded defeaters carry no numeric strength, so an objection expressed only as
+# a defeater (the generated-graph channel) reduces its target by this fixed
+# factor. Heuristic, and only feeds the ADVISORY derived estimate.
+DEFAULT_OBJECTION_STRENGTH = 0.7
+
+# Stored node statuses under which an objection no longer stands, so it must NOT
+# pull its target's confidence down (a rebutted/withdrawn/superseded/defeated
+# objection has itself been answered).
+_NON_STANDING = {"rebutted", "withdrawn", "superseded", "defeated"}
+
+
+def _objection_stands(store, atms, src_id) -> bool:
+    """True iff an objecting node still stands (and so should bind)."""
+    obj = store.claims.get(src_id)
+    if obj is not None and getattr(obj, "status", None) in _NON_STANDING:
+        return False
+    return atms.get(src_id) != ATMSStatus.DEFEATED
 
 
 def _product(xs):
@@ -300,6 +336,12 @@ def propagate_confidence(store, atms=None):
     for a in store.arguments.values():
         supports.setdefault(a.conclusion, []).append(a)
 
+    # Objection edges (refutes/rebuts) grouped by the node they target.
+    objections = {}  # target_id -> [source_id]
+    for e in getattr(store, "edges", {}).values():
+        if e.rel in OBJECTION_RELS:
+            objections.setdefault(e.to, []).append(e.from_id)
+
     derived = {}
     in_progress = set()
 
@@ -309,27 +351,53 @@ def propagate_confidence(store, atms=None):
         obj = store.get(oid)
         if obj is None:
             return 0.0
-        # Evidence and unsupported claims are leaves → stored value.
-        args = supports.get(oid, [])
-        if not args or oid in store.evidence:
-            return _stored_conf(obj)
         if oid in in_progress:
             return _stored_conf(obj)  # cycle guard
         in_progress.add(oid)
 
-        arg_contributions = []
+        # Support term. A supporting argument contributes 0 only when a premise
+        # is genuinely broken (ATMS-defeated premise) — NOT merely because the
+        # argument carries an objection defeater. Objections are applied once,
+        # below, so zeroing here too would double-count them.
+        args = supports.get(oid, [])
+        if args and oid not in store.evidence:
+            arg_contributions = []
+            for a in args:
+                has_defeated_premise = any(
+                    atms.get(p) == ATMSStatus.DEFEATED for p in a.premises
+                )
+                if has_defeated_premise:
+                    arg_contributions.append(0.0)
+                    continue
+                premise_vals = [conf(pid) for pid in a.premises]
+                mode = getattr(a, "support_mode", "independent")
+                combined = _combine_premises(premise_vals, mode)
+                arg_contributions.append(a.confidence.level * combined)
+            support_term = _noisy_or(arg_contributions)
+        else:
+            support_term = _stored_conf(obj)
+
+        # Objections bind on the conclusion through ONE channel (noisy-AND of the
+        # complements), counting each objection exactly once:
+        #   (1) standing refutes/rebuts EDGES → reduced by the objector's derived
+        #       confidence (the authored/imported channel);
+        #   (2) embedded active/conceded defeaters that are NOT edge-mirrors →
+        #       reduced by DEFAULT_OBJECTION_STRENGTH (the generated-graph channel).
+        # `narrows` is excluded (scope qualifier, not a truth penalty).
+        objection_factor = 1.0
+        for src in objections.get(oid, []):
+            if _objection_stands(store, atms, src):
+                objection_factor *= (1.0 - conf(src))
         for a in args:
-            if atms.get(a.id) == ATMSStatus.DEFEATED:
-                arg_contributions.append(0.0)
-                continue
-            premise_vals = [conf(pid) for pid in a.premises]
-            mode = getattr(a, "support_mode", "independent")
-            combined = _combine_premises(premise_vals, mode)
-            arg_contributions.append(a.confidence.level * combined)
+            for d in a.defeaters:
+                if d.status not in (DefeaterStatus.ACTIVE, DefeaterStatus.CONCEDED):
+                    continue
+                if (d.description or "").startswith(EDGE_DEFEATER_PREFIX):
+                    continue  # already counted via its edge in (1)
+                objection_factor *= (1.0 - DEFAULT_OBJECTION_STRENGTH)
 
         in_progress.discard(oid)
-        # Multiple supporting arguments are independent lines of support.
-        result = _noisy_or(arg_contributions) if arg_contributions else _stored_conf(obj)
+        result = support_term * objection_factor
         derived[oid] = result
         return result
 
