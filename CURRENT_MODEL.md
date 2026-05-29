@@ -234,6 +234,44 @@ evidence degrades to `kind:"asserted"` instead of crashing.
    (product/min for conjunctive, max for disjunctive). This *will* change the
    numbers shown for existing workspaces — that's intended.
 
+### AS-BUILT schema (after F1–F4) — report to Josh
+
+The schema as actually shipped on `feature/workbench-editor-provenance`. All
+additions are optional with safe defaults, so every pre-existing workspace loads
+and analyzes unchanged (guardrail test covers this).
+
+**Claim** (in `claims.json`) — added:
+- `node_type: str = "claim"` — claim | thesis | objection | concession
+- `status: str|None = None` — stored status override (live/defeated/superseded/
+  conceded/rebutted/open). `None` ⇒ ATMS computes it at read time.
+- `killed_by: str|None = None` — id of the node that defeated/superseded this one.
+(unchanged: subject/predicate/object, confidence, modality, scope, identity,
+assumes, is_root, previous_version, version_meta, notes, created_at, id)
+
+**Evidence** (in `evidence.json`) — added:
+- `provenance: dict|None = None` — `{"kind":"recorded","source_id":<recall id>,
+  "url","quote","retrieved_at"}` or `{"kind":"asserted"}`. **A `source` string is
+  NOT provenance**; only `recorded` with a pointer is trusted. Default/None ⇒
+  asserted (unverified).
+
+**Argument** (in `arguments.json`) — added:
+- `support_mode: str = "independent"` — conjunctive | disjunctive | independent.
+  Authoring defaults new multi-premise args to conjunctive. Drives F3 propagation.
+
+**Edge** (NEW collection `edges.json`) — the generic typed-edge layer:
+- `{from_id, rel, to, notes, created_at, id}`; `rel` ∈ supports / refutes /
+  rebuts / concedes / grounds / narrows / supersedes. Lossless source of truth;
+  the ATMS-visible Argument/Defeater constructs are kept in sync by an adapter.
+
+**Computed, not stored** (unchanged): ATMS status (accepted/provisional/defeated/
+unknown). **NEW computed**: derived (propagated) confidence — F3 `propagate_
+confidence(store)`; shown alongside stored confidence in get_summary, never
+written to disk.
+
+**New tools (MCP):** add_claim, add_argument, link, import_graph, export_graph,
+attach_source, list_unsourced, set_support_mode, supersede. show_graph gains
+`include_superseded`. (Existing tool contracts unchanged.)
+
 ### Resulting target schema additions (F1)
 - `Claim`: `+ node_type: str = "claim"` (claim|thesis|objection|concession),
   `+ status: Optional[str] = None` (stored override; `None` ⇒ ATMS computes),

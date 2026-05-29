@@ -1200,16 +1200,19 @@ def enhance(ctx, thesis_id, yes):
         console.print("[dim]Enhancement not applied.[/dim]")
         return
 
-    # Clear and regenerate — git preserves the old state
+    # F4 — non-destructive revision: keep the prior thesis (marked superseded)
+    # and its subgraph in the live graph instead of clearing it away.
     enhanced_text = result["enhanced_thesis"]
     rationale = result.get("rationale", "")
     changes = result.get("changes", [])
 
-    s.clear()
+    from epist.graph_io import revise_thesis
 
     with console.status("[bold cyan]Generating new argument graph...[/bold cyan]"):
         try:
-            new_thesis_id = generate_full_graph(s, enhanced_text)
+            rev = revise_thesis(s, resolved_id, enhanced_text,
+                                generate_full_graph, reason=rationale)
+            new_thesis_id = rev["new_thesis_id"]
         except Exception as e:
             console.print(f"[red]Error:[/red] {e}")
             return

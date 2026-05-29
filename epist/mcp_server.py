@@ -330,8 +330,14 @@ async def _do_enhance_and_accept(workspace: str) -> str:
     rationale = result.get("rationale", "")
     changes = result.get("changes", [])
 
-    s.clear()
+    # F4 — non-destructive revision: keep the prior thesis and its subgraph,
+    # marked superseded, instead of clearing the workspace. Demote the old root
+    # first so the regenerated graph's root is unambiguous, then link them.
+    s.claims[resolved_id].is_root = False
+    s.save()
     new_thesis_id = await generate_full_graph_async(s, enhanced_text)
+    from epist.graph_io import supersede
+    supersede(s, resolved_id, new_thesis_id, reason=rationale)
 
     new_summary = compute_summary(s, new_thesis_id)
     (s.home / "summary.md").write_text(new_summary["markdown"])
@@ -782,14 +788,16 @@ async def set_confidence(workspace: str, claim_id: str, confidence: float,
 
 @mcp.tool()
 @_log_tool
-async def show_graph(workspace: str) -> str:
+async def show_graph(workspace: str, include_superseded: bool = True) -> str:
     """Show the argument graph structure for the current thesis.
 
     Returns a tree view of claims, evidence, arguments, and defeaters
-    with ATMS status indicators.
+    with ATMS status indicators. Superseded/rejected positions are listed
+    (with what replaced or killed them) unless include_superseded=False.
 
     Args:
         workspace: Workspace name or path
+        include_superseded: include rejected/superseded positions (default True)
     """
     from epist.engine import compute_atms
 
@@ -863,7 +871,57 @@ async def show_graph(workspace: str) -> str:
                 lines.append(f"    [{status_icon(a_st)}] {a.subject} {a.predicate} {a.object} ({a.confidence.level:.0%})")
                 lines.append(f"        ID: `{aid[:16]}`")
 
+    # F4 — rejected/superseded positions are part of the argumentation, not noise.
+    _REJECTED = {"superseded", "defeated", "rebutted", "conceded"}
+    if include_superseded:
+        rejected = [c for c in s.claims.values()
+                    if (c.status in _REJECTED) and not c.is_root]
+        if rejected:
+            lines.append("")
+            lines.append(f"**Rejected / superseded positions ({len(rejected)}):**")
+            for c in rejected:
+                label = (c.notes or f"{c.subject} {c.predicate} {c.object}").strip()
+                if len(label) > 100:
+                    label = label[:97] + "..."
+                killer = ""
+                if c.killed_by:
+                    k = s.get(c.killed_by)
+                    if k:
+                        klabel = (getattr(k, "notes", "") or
+                                  f"{getattr(k, 'subject', '')} {getattr(k, 'predicate', '')} {getattr(k, 'object', '')}").strip()
+                        verb = "superseded by" if c.status == "superseded" else "killed by"
+                        killer = f"  ({verb}: {klabel[:60]})"
+                lines.append(f"    [x] [{c.status}] {label}{killer}")
+                lines.append(f"        ID: `{c.id[:16]}`")
+
     return "\n".join(lines)
+
+
+@mcp.tool()
+@_log_tool
+async def supersede(workspace: str, old_claim_id: str, new_claim_id: str,
+                    reason: str = "") -> str:
+    """Mark a claim as superseded by another (F4 — preserve the dialectic).
+
+    Never deletes. The old claim and its subgraph stay in the graph as
+    first-class history, marked 'superseded', linked to what replaced it.
+
+    Args:
+        workspace: Workspace name or path
+        old_claim_id: id (or prefix) of the claim being replaced
+        new_claim_id: id (or prefix) of the claim that replaces it
+        reason: why it was superseded (kept as argument content)
+    """
+    from epist import graph_io
+    s = _get_store(workspace)
+    try:
+        r = graph_io.supersede(s, old_claim_id, new_claim_id, reason=reason)
+    except ValueError as e:
+        return f"Error: {e}"
+    if s.is_git_repo():
+        s.git_commit(f"[manual] Supersede {r['old'][:8]} with {r['new'][:8]}")
+    return (f"Claim `{r['old'][:16]}` is now **superseded** by `{r['new'][:16]}` "
+            f"(kept in graph as history).")
 
 
 # ── F1: direct authoring + import/export ──────────────────────────────

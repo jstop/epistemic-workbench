@@ -101,6 +101,64 @@ def add_argument(store, conclusion_id, premise_ids, pattern="modus_ponens",
     return a
 
 
+def supersede(store, old_claim_id, new_claim_id, reason="") -> dict:
+    """Mark old_claim as superseded by new_claim (F4 — hold the dialectic).
+
+    Never deletes. Adds a `supersedes` edge (new → old), sets the old node's
+    status='superseded' and killed_by=new, demotes it from root, and records the
+    version linkage on the new node. The old claim and its subgraph remain in the
+    graph as first-class, queryable history."""
+    old = store.get(old_claim_id)
+    new = store.get(new_claim_id)
+    if not old or old.id not in store.claims:
+        raise ValueError(f"old claim not found: {old_claim_id}")
+    if not new or new.id not in store.claims:
+        raise ValueError(f"new claim not found: {new_claim_id}")
+    if old.id == new.id:
+        raise ValueError("a claim cannot supersede itself")
+
+    e = Edge(from_id=new.id, rel="supersedes", to=old.id, notes=reason)
+    store.edges[e.id] = e
+
+    old.status = "superseded"
+    old.killed_by = new.id
+    old.is_root = False
+
+    new.previous_version = old.id
+    meta = dict(new.version_meta or {})
+    if reason:
+        meta["rationale"] = reason
+    new.version_meta = meta or None
+    store.save()
+    return {"edge_id": e.id, "old": old.id, "new": new.id}
+
+
+def revise_thesis(store, old_thesis_id, new_thesis_text, generate_fn, reason="") -> dict:
+    """Non-destructive revision: generate a graph for the revised thesis WITHOUT
+    clearing the workspace, then mark the prior thesis superseded by the new one.
+
+    `generate_fn(store, text) -> new_thesis_id` is the graph generator (sync or
+    pre-awaited); injecting it keeps this layer testable without an LLM. The
+    prior thesis is demoted from root *before* generation so the new graph's root
+    is unambiguous, then linked via supersede().
+
+    Returns {old_thesis_id, new_thesis_id, edge_id}.
+    """
+    old = store.get(old_thesis_id)
+    if not old or old.id not in store.claims:
+        raise ValueError(f"old thesis not found: {old_thesis_id}")
+
+    # Demote (do NOT delete) so the generated graph is the sole root.
+    old.is_root = False
+    store.save()
+
+    new_thesis_id = generate_fn(store, new_thesis_text)
+
+    result = supersede(store, old.id, new_thesis_id, reason=reason)
+    return {"old_thesis_id": old.id, "new_thesis_id": new_thesis_id,
+            "edge_id": result["edge_id"]}
+
+
 def set_support_mode(store, argument_id, mode):
     """Set how an argument combines its premises (drives F3 propagation)."""
     if mode not in SUPPORT_MODES:
