@@ -14,6 +14,7 @@ from epist.model import (
     DefeaterType, DefeaterStatus,
 )
 from epist.engine import (
+    display_text,
     compute_atms, ATMSStatus, check_coherence, find_blind_spots,
     surface_assumptions,
 )
@@ -376,7 +377,7 @@ def compute_summary(store, thesis_id=None) -> dict:
                 "premises": premises,
                 "defeaters": [
                     {"argument_id": aid, "index": i,
-                     "type": d.type.value, "description": d.description,
+                     "type": d.type.value, "description": display_text(d.description),
                      "status": d.status.value, "response": d.response}
                     for i, d in enumerate(a.defeaters)
                 ],
@@ -391,7 +392,7 @@ def compute_summary(store, thesis_id=None) -> dict:
                 "argument_id": aid,
                 "index": i,
                 "type": d.type.value,
-                "description": d.description,
+                "description": display_text(d.description),
                 "status": d.status.value,
                 "response": d.response,
                 "argument_label": a.label or "(unlabeled)",

@@ -93,7 +93,7 @@ class EdgeRelation(Enum):
 
 # Stored node-status vocabulary for imported/authored graphs (brief §4). When a
 # node carries no explicit status, the engine's ATMS computes one at read time.
-NODE_STATUSES = {"live", "defeated", "superseded", "conceded", "rebutted", "open"}
+NODE_STATUSES = {"live", "defeated", "superseded", "conceded", "rebutted", "open", "retired"}
 
 # Argument premise-combination modes (F3 wires propagation onto these).
 SUPPORT_MODES = {"conjunctive", "disjunctive", "independent"}

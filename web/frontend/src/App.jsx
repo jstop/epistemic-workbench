@@ -145,6 +145,15 @@ export default function App() {
     }
   }, [currentWorkspace, handleUpdated]);
 
+  const handleArchive = useCallback(async (name, archived) => {
+    try {
+      await api.archiveWorkspace(name, archived);
+      refreshWorkspaceList();
+    } catch (err) {
+      alert(`Archive failed: ${err.message}`);
+    }
+  }, [refreshWorkspaceList]);
+
   const handleCompare = useCallback((other) => {
     setCompareTarget(other);
   }, []);
@@ -312,6 +321,7 @@ export default function App() {
           onMerge={handleMerge}
           onNew={() => setShowNewWorkspace(true)}
           onRefresh={refreshWorkspaceList}
+          onArchive={handleArchive}
         />
 
         {/* Main pane: tabbed (Summary default) */}
@@ -442,6 +452,7 @@ export default function App() {
                       <span style={{ fontSize: "9px", color: "#f87171" }}>rebuts</span>
                       <span style={{ fontSize: "9px", color: "#fb923c" }}>concedes</span>
                       <span style={{ fontSize: "9px", color: "#a78bfa" }}>supersedes</span>
+                      <span style={{ fontSize: "9px", color: "#a78bfa" }}>dim = superseded/retired</span>
                       <span style={{ fontSize: "9px", color: "#FF6B35" }}>→n% derived</span>
                     </div>
                     <div style={{ fontSize: "9px", color: "#333" }}>|</div>

@@ -1,6 +1,19 @@
 import { useState, useEffect } from "react";
 import * as api from "../api.js";
 
+const linkBtnStyle = (color) => ({
+  background: `${color}18`,
+  border: `1px solid ${color}66`,
+  color,
+  borderRadius: "3px",
+  padding: "3px 8px",
+  fontSize: "9px",
+  cursor: "pointer",
+  fontFamily: "'JetBrains Mono', monospace",
+  letterSpacing: "1px",
+  textTransform: "uppercase",
+});
+
 export default function SummaryPanel({ workspace, onThesisChange, activeThesisId, onSelectNode, onUpdated }) {
   const [summary, setSummary] = useState(null);
   const [theses, setTheses] = useState([]);
@@ -555,9 +568,25 @@ export default function SummaryPanel({ workspace, onThesisChange, activeThesisId
         {assessment.confidence_gap && (
           <div style={{ marginTop: "10px", padding: "8px", background: "#0A0A0A", borderRadius: "3px", borderLeft: "3px solid #fbbf24", fontSize: "10px" }}>
             <div style={{ color: "#fbbf24", fontSize: "9px", letterSpacing: "1px", textTransform: "uppercase", marginBottom: "4px" }}>Confidence gap</div>
-            <div style={{ color: "#999", lineHeight: 1.5 }}>
-              Stored {(assessment.confidence_gap.stored * 100).toFixed(0)}% vs derived {(assessment.confidence_gap.derived * 100).toFixed(0)}%.
-              {assessment.confidence_gap.binding_objections?.length > 0 && " Binding objections:"}
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", color: "#999", lineHeight: 1.5 }}>
+              <span>
+                Stored {(assessment.confidence_gap.stored * 100).toFixed(0)}% vs derived {(assessment.confidence_gap.derived * 100).toFixed(0)}%.
+                {assessment.confidence_gap.binding_objections?.length > 0 && " Binding objections:"}
+              </span>
+              <button
+                onClick={async () => {
+                  await api.setConfidence(workspace, {
+                    claim_id: assessment.confidence_gap.claim_id,
+                    confidence: Math.round(assessment.confidence_gap.derived * 100) / 100,
+                    note: `adopted derived confidence (was ${(assessment.confidence_gap.stored * 100).toFixed(0)}%)`,
+                  });
+                  fetch(selectedThesis);
+                  if (onUpdated) onUpdated();
+                }}
+                style={{ ...linkBtnStyle("#fbbf24"), marginLeft: "auto", flexShrink: 0 }}
+              >
+                Adopt derived
+              </button>
             </div>
             {(assessment.confidence_gap.binding_objections || []).map((o) => (
               <div key={o.id} onClick={() => onSelectNode && onSelectNode(o.id)} style={{ color: "#f87171", cursor: "pointer", marginTop: "3px" }}>
@@ -584,6 +613,145 @@ export default function SummaryPanel({ workspace, onThesisChange, activeThesisId
           </div>
         )}
       </div>
+
+      <LibrarySection workspace={workspace} thesis={thesis} onUpdated={onUpdated} />
+      <HistorySection workspace={workspace} refreshKey={summary} />
+    </div>
+  );
+}
+
+// ── Living-library bridge ───────────────────────────────────────────
+
+const STANCE_COLORS = { RELY: "#4ade80", NOTE: "#fbbf24", SUSPECT: "#fb923c", CONTESTED: "#f87171", HYPOTHESIS: "#60a5fa" };
+
+function LibrarySection({ workspace, thesis, onUpdated }) {
+  const [data, setData] = useState(null);
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState([]);
+  const [mode, setMode] = useState(null); // null | "search" | "capture"
+  const [capId, setCapId] = useState("");
+  const [capCluster, setCapCluster] = useState("Positions & writing");
+  const [capNote, setCapNote] = useState("");
+  const [msg, setMsg] = useState(null);
+
+  const load = () => {
+    if (!workspace) return;
+    api.getWorkspaceBeliefs(workspace).then(setData).catch(() => setData(null));
+  };
+  useEffect(load, [workspace]);
+
+  useEffect(() => {
+    if (mode !== "search" || q.trim().length < 2) { setResults([]); return; }
+    const t = setTimeout(() => api.searchBeliefs(q.trim()).then(setResults).catch(() => setResults([])), 250);
+    return () => clearTimeout(t);
+  }, [q, mode]);
+
+  if (!data) return null;
+  const slug = (t) => (t || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
+  const linked = data.beliefs || [];
+
+  const link = async (id) => { await api.linkBelief(workspace, id); setMode(null); setQ(""); load(); };
+  const unlink = async (id) => { await api.linkBelief(workspace, id, true); load(); };
+  const capture = async () => {
+    setMsg(null);
+    try {
+      const r = await api.captureBelief(workspace, {
+        belief_id: capId || `wb-${slug(workspace)}`,
+        claim: thesis.notes || thesis.label,
+        cluster: capCluster, note: capNote,
+      });
+      setMsg(r.warning ? `Captured with warning: ${r.warning}` : `Captured as ${r.belief.id} (${r.belief.stance}). Recorded under the web channel's agent identity; stand behind it from your own terminal to make it your word.`);
+      setMode(null); load();
+      if (onUpdated) onUpdated();
+    } catch (err) { setMsg(err.message); }
+  };
+
+  return (
+    <div style={{ background: "#141414", borderRadius: "4px", padding: "10px" }}>
+      <div style={{ display: "flex", alignItems: "center", marginBottom: "8px", gap: "6px" }}>
+        <span style={{ fontSize: "9px", color: "#555", letterSpacing: "1px", textTransform: "uppercase" }}>
+          Living library · linked beliefs ({linked.length})
+        </span>
+        {!data.available && <span style={{ fontSize: "9px", color: "#f87171" }}>library unavailable</span>}
+        {data.available && (
+          <div style={{ marginLeft: "auto", display: "flex", gap: "4px" }}>
+            <button onClick={() => setMode(mode === "search" ? null : "search")} style={linkBtnStyle("#60a5fa")}>Link belief</button>
+            {thesis && <button onClick={() => { setMode(mode === "capture" ? null : "capture"); setCapId(`wb-${slug(workspace)}`); }} style={linkBtnStyle("#FF6B35")}>Capture thesis as belief</button>}
+          </div>
+        )}
+      </div>
+      {linked.length === 0 && mode === null && (
+        <div style={{ fontSize: "10px", color: "#444", fontStyle: "italic" }}>
+          No library beliefs linked. A workspace argues for something; link the belief it argues for, or capture the thesis into the library.
+        </div>
+      )}
+      {linked.map((b) => (
+        <div key={b.id} style={{ padding: "6px 8px", background: "#0A0A0A", borderRadius: "3px", marginBottom: "4px", fontSize: "10px", borderLeft: `3px solid ${STANCE_COLORS[b.stance] || "#555"}` }}>
+          <div style={{ display: "flex", gap: "6px", alignItems: "baseline" }}>
+            <span style={{ color: STANCE_COLORS[b.stance] || "#888", fontSize: "9px", letterSpacing: "1px", flexShrink: 0 }}>{b.stance}</span>
+            <span style={{ color: "#ccc", lineHeight: 1.4 }}>{b.claim}</span>
+            <button onClick={() => unlink(b.id)} style={{ ...linkBtnStyle("#555"), marginLeft: "auto", flexShrink: 0 }}>unlink</button>
+          </div>
+          <div style={{ color: "#555", fontSize: "9px", marginTop: "2px" }}>
+            {b.id} · {b.method} · {b.freshness}{b.stood_behind_by ? ` · stood behind by ${b.stood_behind_by}` : " · not yet stood behind by the owner"}
+          </div>
+        </div>
+      ))}
+      {data.missing?.length > 0 && <div style={{ fontSize: "9px", color: "#f87171" }}>Linked but not found in the library: {data.missing.join(", ")}</div>}
+      {mode === "search" && (
+        <div style={{ marginTop: "8px" }}>
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search beliefs by claim or id…" autoFocus
+            style={{ width: "100%", background: "#0A0A0A", border: "1px solid #222", borderRadius: "3px", color: "#e0e0e0", padding: "7px 9px", fontSize: "11px", fontFamily: "'JetBrains Mono', monospace", outline: "none", boxSizing: "border-box" }} />
+          <div style={{ maxHeight: "220px", overflow: "auto", marginTop: "4px" }}>
+            {results.map((b) => (
+              <div key={b.id} onClick={() => link(b.id)} style={{ padding: "5px 8px", cursor: "pointer", fontSize: "10px", borderLeft: `3px solid ${STANCE_COLORS[b.stance] || "#555"}`, borderBottom: "1px solid #1a1a1a" }}>
+                <span style={{ color: STANCE_COLORS[b.stance] || "#888", fontSize: "9px", marginRight: "6px" }}>{b.stance}</span>
+                <span style={{ color: "#bbb" }}>{b.claim}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {mode === "capture" && (
+        <div style={{ marginTop: "8px", display: "flex", flexDirection: "column", gap: "6px" }}>
+          <div style={{ fontSize: "9px", color: "#777", lineHeight: 1.5 }}>
+            Captures the thesis as a <b>derived</b> belief whose evidence is this workspace at its current commit. It is written under the web channel's agent identity; it becomes your word only when you stand behind it from your own terminal.
+          </div>
+          <input value={capId} onChange={(e) => setCapId(e.target.value)} placeholder="belief id (kebab-case)" style={{ background: "#0A0A0A", border: "1px solid #222", borderRadius: "3px", color: "#e0e0e0", padding: "7px 9px", fontSize: "11px", fontFamily: "'JetBrains Mono', monospace", outline: "none" }} />
+          <input value={capCluster} onChange={(e) => setCapCluster(e.target.value)} placeholder="cluster" style={{ background: "#0A0A0A", border: "1px solid #222", borderRadius: "3px", color: "#e0e0e0", padding: "7px 9px", fontSize: "11px", fontFamily: "'JetBrains Mono', monospace", outline: "none" }} />
+          <input value={capNote} onChange={(e) => setCapNote(e.target.value)} placeholder="note (optional)" style={{ background: "#0A0A0A", border: "1px solid #222", borderRadius: "3px", color: "#e0e0e0", padding: "7px 9px", fontSize: "11px", fontFamily: "'JetBrains Mono', monospace", outline: "none" }} />
+          <div style={{ display: "flex", gap: "4px" }}>
+            <button onClick={capture} disabled={!capId} style={linkBtnStyle("#FF6B35")}>Capture</button>
+            <button onClick={() => setMode(null)} style={linkBtnStyle("#555")}>Cancel</button>
+          </div>
+        </div>
+      )}
+      {msg && <div style={{ fontSize: "10px", color: msg.startsWith("Captured as") ? "#4ade80" : "#fbbf24", marginTop: "6px", lineHeight: 1.5 }}>{msg}</div>}
+    </div>
+  );
+}
+
+// ── Recent history with actor attribution ───────────────────────────
+
+const ACTOR_COLORS = (a) => a === "owner" ? "#4ade80" : a?.startsWith("owner:") ? "#86efac" : a?.startsWith("agent:") ? "#a78bfa" : "#555";
+
+function HistorySection({ workspace, refreshKey }) {
+  const [log, setLog] = useState([]);
+  useEffect(() => {
+    if (!workspace) return;
+    api.getGitLog(workspace).then((l) => setLog(l.slice(0, 10))).catch(() => setLog([]));
+  }, [workspace, refreshKey]);
+  if (log.length === 0) return null;
+  return (
+    <div style={{ background: "#141414", borderRadius: "4px", padding: "10px" }}>
+      <div style={{ fontSize: "9px", color: "#555", letterSpacing: "1px", textTransform: "uppercase", marginBottom: "8px" }}>Recent history · who wrote what</div>
+      {log.map((c) => (
+        <div key={c.hash} style={{ display: "flex", gap: "8px", fontSize: "10px", padding: "3px 0", borderBottom: "1px solid #1a1a1a", alignItems: "baseline" }}>
+          <span style={{ color: "#444", flexShrink: 0 }}>{c.date.slice(0, 10)}</span>
+          <span style={{ color: ACTOR_COLORS(c.actor), flexShrink: 0, fontSize: "9px", letterSpacing: "1px" }}>{c.actor}</span>
+          <span style={{ color: "#999", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.subject}</span>
+        </div>
+      ))}
     </div>
   );
 }

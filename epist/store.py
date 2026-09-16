@@ -304,20 +304,28 @@ class Store:
         self._git("commit", "-m", "[init] epistemic workspace", "--allow-empty", check=False)
 
     def git_commit(self, message: str):
-        """Stage all changes and commit. No-op if nothing changed."""
+        """Stage all changes and commit as the channel's actor. No-op if nothing changed.
+
+        The actor (owner / owner:web / agent:claude-desktop / agent:cli …) is
+        recorded twice: as the git author, and as an `Actor:` trailer in the
+        message so it survives rebases and reads in plain `git log`."""
+        from epist.actor import resolve_actor, git_author
         self._git("add", "-A")
         # Check if there's anything to commit
         result = self._git("diff", "--cached", "--quiet", check=False)
         if result.returncode == 0:
             return  # nothing staged
-        self._git("commit", "-m", message)
+        actor = resolve_actor()
+        if "\nActor: " not in message:
+            message = f"{message.rstrip()}\n\nActor: {actor}"
+        self._git("commit", "--author", git_author(actor), "-m", message)
 
     def git_log(self, max_count: int = 50) -> list[dict]:
-        """Return commit history as list of {hash, subject, body, date}."""
+        """Return commit history as list of {hash, subject, body, date, actor}."""
         if not self.is_git_repo():
             return []
         sep = "---COMMIT---"
-        fmt = f"%H%n%s%n%b%n%aI%n{sep}"
+        fmt = f"%H%n%s%n%b%n%aI%n%an%n{sep}"
         result = self._git("log", f"--max-count={max_count}", f"--format={fmt}", check=False)
         if result.returncode != 0:
             return []
@@ -327,13 +335,24 @@ class Store:
             if not block:
                 continue
             lines = block.split("\n")
-            if len(lines) < 4:
+            if len(lines) < 5:
                 continue
+            body = "\n".join(lines[2:-2]).strip()
+            actor = None
+            for ln in body.splitlines():
+                if ln.startswith("Actor: "):
+                    actor = ln[len("Actor: "):].strip()
+            author = lines[-1]
+            # Commits from before actors were channel-derived carry the machine's
+            # git identity; report them as unattributed rather than as the owner.
+            if actor is None and (author.startswith("owner") or author.startswith("agent:")):
+                actor = author
             commits.append({
                 "hash": lines[0],
                 "subject": lines[1],
-                "body": "\n".join(lines[2:-1]).strip(),
-                "date": lines[-1],
+                "body": body,
+                "date": lines[-2],
+                "actor": actor or "unattributed",
             })
         return commits
 

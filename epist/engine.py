@@ -31,9 +31,13 @@ def compute_atms(store):
     """
     status = {}
 
-    # Evidence starts as accepted (grounded)
+    # Evidence with a RECORDED source starts accepted (grounded). Evidence that is
+    # merely asserted — a source string with nothing behind it, which is what
+    # generation produces — starts provisional: it still lets arguments go
+    # through, but it never reads as settled.
+    from epist.provenance import is_recorded
     for eid, ev in store.evidence.items():
-        status[eid] = ATMSStatus.ACCEPTED
+        status[eid] = ATMSStatus.ACCEPTED if is_recorded(ev) else ATMSStatus.PROVISIONAL
 
     # Claims start as provisional
     for cid in store.claims:
@@ -273,6 +277,19 @@ OBJECTION_RELS = {"refutes", "rebuts"}
 # objection once — via the edge — instead of double-counting the mirror.
 EDGE_DEFEATER_PREFIX = "[edge:"
 
+
+def display_text(description: str) -> str:
+    """Strip the internal `[edge:rel]` marker that ties a mirrored defeater to
+    its objection edge. The marker is bookkeeping for propagation, not prose."""
+    if not description:
+        return description
+    d = description.lstrip()
+    if d.startswith(EDGE_DEFEATER_PREFIX):
+        close = d.find("]")
+        if close != -1:
+            return d[close + 1:].lstrip()
+    return description
+
 # Embedded defeaters carry no numeric strength, so an objection expressed only as
 # a defeater (the generated-graph channel) reduces its target by this fixed
 # factor. Heuristic, and only feeds the ADVISORY derived estimate.
@@ -281,7 +298,7 @@ DEFAULT_OBJECTION_STRENGTH = 0.7
 # Stored node statuses under which an objection no longer stands, so it must NOT
 # pull its target's confidence down (a rebutted/withdrawn/superseded/defeated
 # objection has itself been answered).
-_NON_STANDING = {"rebutted", "withdrawn", "superseded", "defeated"}
+_NON_STANDING = {"rebutted", "withdrawn", "superseded", "defeated", "retired"}
 
 
 def _objection_stands(store, atms, src_id) -> bool:

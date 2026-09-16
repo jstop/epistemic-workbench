@@ -21,6 +21,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from epist.store import Store
 from epist.model import DefeaterStatus
+from epist.actor import declare_channel, agent_actor
+# This process is an AI surface's door into the workspaces: everything it
+# writes is attributed to that agent, never to the owner.
+declare_channel(agent_actor(os.environ.get("EPIST_AGENT", "claude-desktop")))
 from epist.agent import (
     generate_full_graph_async,
     enhance_thesis_async,
@@ -49,7 +53,7 @@ logger.addHandler(_stderr_handler)
 # Also log to a file if the workspaces dir is writable
 _log_dir = Path(os.environ.get(
     "EPIST_WORKSPACES",
-    Path.home() / "EPISTEMIC_TOOLS" / "workspaces",
+    Path.home() / "workspace" / "epistemic" / "workspaces",
 ))
 try:
     _log_dir.mkdir(parents=True, exist_ok=True)
@@ -155,7 +159,7 @@ def _run_job_in_thread(job_id, coro_fn, *args):
 
 WORKSPACES_DIR = Path(os.environ.get(
     "EPIST_WORKSPACES",
-    Path.home() / "EPISTEMIC_TOOLS" / "workspaces",
+    Path.home() / "workspace" / "epistemic" / "workspaces",
 ))
 
 logger.info(f"Workspaces dir: {WORKSPACES_DIR}")

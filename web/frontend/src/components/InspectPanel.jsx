@@ -648,10 +648,19 @@ export default function InspectPanel({ workspace, node, edges, allNodes, onUpdat
     });
 
   const handleDelete = async () => {
-    if (!confirm(`Delete this ${node.type}?`)) return;
+    if (!confirm(`Delete this ${node.type}? It has no connections, so nothing else references it.`)) return;
     if (node.type === "claim") await api.deleteClaim(workspace, node.id);
     else if (node.type === "evidence") await api.deleteEvidence(workspace, node.id);
     onUpdated();
+  };
+
+  const handleRetire = async () => {
+    const reason = prompt("Why is this claim withdrawn? (kept in the node's notes)");
+    if (reason === null) return;
+    try {
+      await api.retire(workspace, { claim_id: node.id, reason });
+      onUpdated();
+    } catch (err) { alert(err.message); }
   };
 
   const supportingArgs = relatedArgs.filter((a) => a.conclusion === node.id);
@@ -699,11 +708,22 @@ export default function InspectPanel({ workspace, node, edges, allNodes, onUpdat
           style={{ width: "100%", marginTop: "4px", accentColor: "#FF6B35" }}
         />
         {node.derived != null && (
-          <div style={{ display: "flex", justifyContent: "space-between", marginTop: "4px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "4px", gap: "6px" }}>
             <span style={{ fontSize: "9px", color: "#555", letterSpacing: "1px", textTransform: "uppercase" }}>Derived (propagated)</span>
-            <span style={{ fontSize: "11px", color: Math.abs(node.derived - node.confidence) >= 0.05 ? "#fbbf24" : "#888" }}>
+            <span style={{ marginLeft: "auto", fontSize: "11px", color: Math.abs(node.derived - node.confidence) >= 0.05 ? "#fbbf24" : "#888" }}>
               {(node.derived * 100).toFixed(0)}%
             </span>
+            {node.type === "claim" && Math.abs(node.derived - node.confidence) >= 0.05 && (
+              <button
+                onClick={async () => {
+                  await api.setConfidence(workspace, { claim_id: node.id, confidence: Math.round(node.derived * 100) / 100, note: `adopted derived confidence (was ${(node.confidence * 100).toFixed(0)}%)` });
+                  onUpdated();
+                }}
+                style={btn({ background: "#fbbf2422", borderColor: "#fbbf24", color: "#fbbf24", padding: "3px 6px" })}
+              >
+                Adopt
+              </button>
+            )}
           </div>
         )}
         {node.type === "claim" && (
@@ -815,16 +835,32 @@ export default function InspectPanel({ workspace, node, edges, allNodes, onUpdat
         </div>
       </div>
 
-      <button
-        onClick={handleDelete}
-        style={{
-          background: "transparent", border: "1px solid #333",
-          color: "#f87171", borderRadius: "3px", padding: "8px",
-          fontSize: "10px", cursor: "pointer", fontFamily: "'JetBrains Mono', monospace",
-        }}
-      >
-        DELETE {node.type.toUpperCase()} (prefer supersede — deletion loses the dialectic)
-      </button>
+      {node.type === "claim" && node.status !== "retired" && (
+        <button
+          onClick={handleRetire}
+          style={{
+            background: "transparent", border: "1px solid #333",
+            color: "#a78bfa", borderRadius: "3px", padding: "8px",
+            fontSize: "10px", cursor: "pointer", fontFamily: "'JetBrains Mono', monospace",
+          }}
+          title="Withdraw this claim. It stays in the graph as history."
+        >
+          RETIRE CLAIM (withdraw, keep in history)
+        </button>
+      )}
+      {connections.length === 0 && (
+        <button
+          onClick={handleDelete}
+          style={{
+            background: "transparent", border: "1px solid #333",
+            color: "#f87171", borderRadius: "3px", padding: "8px",
+            fontSize: "10px", cursor: "pointer", fontFamily: "'JetBrains Mono', monospace",
+          }}
+          title="Only offered for nodes nothing else references."
+        >
+          DELETE UNCONNECTED {node.type.toUpperCase()}
+        </button>
+      )}
     </div>
   );
 }

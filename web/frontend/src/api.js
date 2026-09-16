@@ -120,3 +120,18 @@ export const listProposals = (name) => request(`${ws(name)}/proposals`);
 export const getProposal = (name, id) => request(`${ws(name)}/proposals/${id}`);
 export const commitProposal = (name, id, acceptedNodeIds) =>
   post(`${ws(name)}/proposals/${id}/commit`, { accepted_node_ids: acceptedNodeIds });
+
+// ── F4: retire (withdraw without deleting) ──────────────────────────
+export const retire = (name, data) => post(`${ws(name)}/retire`, data);
+
+// ── Workspace archiving ─────────────────────────────────────────────
+export const archiveWorkspace = (name, archived = true) => post(`${ws(name)}/archive`, { archived });
+
+// ── Living-library bridge ───────────────────────────────────────────
+export const libraryStatus = () => request(`/library/status`);
+export const searchBeliefs = (q, cluster = "") =>
+  request(`/library/beliefs?q=${encodeURIComponent(q)}&cluster=${encodeURIComponent(cluster)}`);
+export const getWorkspaceBeliefs = (name) => request(`${ws(name)}/beliefs`);
+export const linkBelief = (name, beliefId, unlink = false) =>
+  post(`${ws(name)}/beliefs`, { belief_id: beliefId, unlink });
+export const captureBelief = (name, data) => post(`${ws(name)}/capture-belief`, data);

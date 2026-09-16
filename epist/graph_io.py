@@ -133,6 +133,24 @@ def supersede(store, old_claim_id, new_claim_id, reason="") -> dict:
     return {"edge_id": e.id, "old": old.id, "new": new.id}
 
 
+def retire(store, claim_id, reason="") -> dict:
+    """Withdraw a claim without deleting it (F4 — deletion loses the dialectic).
+
+    The node stays in the graph with status='retired'; the reason is kept in
+    its notes. Nothing else changes: arguments that used it keep referencing it
+    and the ATMS will read the retirement through the stored status."""
+    c = store.get(claim_id)
+    if not c or c.id not in store.claims:
+        raise ValueError(f"claim not found: {claim_id}")
+    c.status = "retired"
+    c.is_root = False
+    if reason:
+        c.notes = (c.notes or "").rstrip()
+        c.notes = f"{c.notes}\n\n[retired] {reason}".strip()
+    store.save()
+    return {"id": c.id, "status": "retired"}
+
+
 def revise_thesis(store, old_thesis_id, new_thesis_text, generate_fn, reason="") -> dict:
     """Non-destructive revision: generate a graph for the revised thesis WITHOUT
     clearing the workspace, then mark the prior thesis superseded by the new one.

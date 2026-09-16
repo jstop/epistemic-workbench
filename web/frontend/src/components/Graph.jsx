@@ -23,7 +23,7 @@ export const NODE_TYPES = {
   evidence: { label: "Evidence", color: "#4ade80", symbol: "■" },
 };
 
-const REJECTED = new Set(["superseded", "defeated", "rebutted", "conceded"]);
+const REJECTED = new Set(["superseded", "defeated", "rebutted", "conceded", "retired"]);
 
 const ATMS_BORDER = {
   accepted: "#4ade80",
@@ -42,10 +42,59 @@ const DEFEATER_CHIP_COLORS = {
 const edgeSourceId = (e) => e.source.id || e.source;
 const edgeTargetId = (e) => e.target.id || e.target;
 
+// Layer assignment for the layered layout. Argument graphs are rooted DAGs:
+// the thesis sits on top, its premises one layer down, their premises below,
+// evidence at the bottom. Objections sit beside what they attack; superseded
+// positions sit beside what replaced them.
+function assignLayers(nodes, edges) {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const layer = new Map();
+  const roots = nodes.filter((n) => n.is_root || n.node_type === "thesis");
+  const seeds = roots.length ? roots : nodes.filter((n) => !edges.some((e) => edgeSourceId(e) === n.id && (e.type === "supports" || e.type === "grounds")));
+  const premisesOf = new Map();
+  const attackersOf = new Map();
+  const supersededBy = new Map();
+  edges.forEach((e) => {
+    const src = edgeSourceId(e), tgt = edgeTargetId(e);
+    if (e.type === "supports" || e.type === "grounds" || e.type === "assumes") {
+      if (!premisesOf.has(tgt)) premisesOf.set(tgt, []);
+      premisesOf.get(tgt).push(src);
+    } else if (e.type === "supersedes") {
+      supersededBy.set(tgt, src);
+    } else {
+      if (!attackersOf.has(tgt)) attackersOf.set(tgt, []);
+      attackersOf.get(tgt).push(src);
+    }
+  });
+  const queue = seeds.map((n) => [n.id, 0]);
+  while (queue.length) {
+    const [id, d] = queue.shift();
+    if (layer.has(id) && layer.get(id) >= d) continue;
+    layer.set(id, d);
+    (premisesOf.get(id) || []).forEach((p) => queue.push([p, d + 1]));
+    (attackersOf.get(id) || []).forEach((a) => queue.push([a, d]));
+  }
+  supersededBy.forEach((newer, older) => { if (layer.has(newer) && !layer.has(older)) layer.set(older, layer.get(newer)); });
+  let maxLayer = 0;
+  layer.forEach((d) => { if (d > maxLayer) maxLayer = d; });
+  nodes.forEach((n) => {
+    if (!layer.has(n.id)) layer.set(n.id, n.type === "evidence" ? maxLayer + 1 : maxLayer);
+  });
+  // Evidence never sits above the claims it grounds; push it to the bottom band.
+  let deepest = 0;
+  layer.forEach((d) => { if (d > deepest) deepest = d; });
+  nodes.forEach((n) => { if (n.type === "evidence") layer.set(n.id, Math.max(layer.get(n.id), deepest)); });
+  return layer;
+}
+
 export default function Graph({ nodes, edges, selectedId, highlightIds, onSelectNode, onSelectDefeater }) {
   const svgRef = useRef(null);
   const simRef = useRef(null);
   const [, setTick] = useState(0);
+  const [layout, setLayout] = useState(() => {
+    try { return localStorage.getItem("epist.graph.layout") || "layered"; } catch { return "layered"; }
+  });
+  useEffect(() => { try { localStorage.setItem("epist.graph.layout", layout); } catch { /* ignore */ } }, [layout]);
 
   useEffect(() => {
     if (!svgRef.current || nodes.length === 0) return;
@@ -68,12 +117,55 @@ export default function Graph({ nodes, edges, selectedId, highlightIds, onSelect
 
     if (simRef.current) simRef.current.stop();
 
-    const sim = d3.forceSimulation(nodes)
-      .force("link", d3.forceLink(validEdges).id((d) => d.id).distance(160).strength(0.3))
-      .force("charge", d3.forceManyBody().strength(-500))
-      .force("center", d3.forceCenter(width / 2, height / 2))
-      .force("collision", d3.forceCollide().radius(55))
-      .alphaDecay(0.02)
+    let sim;
+    if (layout === "layered") {
+      const layers = assignLayers(nodes, validEdges);
+      let deepest = 0;
+      layers.forEach((d) => { if (d > deepest) deepest = d; });
+      const bandH = Math.max(120, Math.min(180, (height - 140) / (deepest + 1)));
+      const top = 80;
+      const yOf = (id) => top + (layers.get(id) || 0) * bandH;
+      // Spread each band evenly across the width, keeping a node near the
+      // nodes it connects to: order a band by the mean x-slot of its
+      // neighbours in the band above (barycenter), thesis in the middle.
+      const bands = new Map();
+      nodes.forEach((n) => { const d = layers.get(n.id) || 0; if (!bands.has(d)) bands.set(d, []); bands.get(d).push(n); });
+      const slot = new Map();
+      const neighbours = new Map();
+      validEdges.forEach((e) => {
+        const a = edgeSourceId(e), b = edgeTargetId(e);
+        if (!neighbours.has(a)) neighbours.set(a, []); neighbours.get(a).push(b);
+        if (!neighbours.has(b)) neighbours.set(b, []); neighbours.get(b).push(a);
+      });
+      [...bands.keys()].sort((a, b) => a - b).forEach((d) => {
+        const band = bands.get(d);
+        const key = (n) => {
+          const above = (neighbours.get(n.id) || []).filter((m) => slot.has(m)).map((m) => slot.get(m));
+          if (above.length) return above.reduce((x, y) => x + y, 0) / above.length;
+          return n.is_root || n.node_type === "thesis" ? 0.5 : 0.5 + (n.node_type === "objection" ? 0.2 : n.node_type === "concession" ? 0.3 : n.status ? -0.3 : 0);
+        };
+        band.map((n) => [n, key(n)]).sort((a, b) => a[1] - b[1]).forEach(([n], i) => slot.set(n.id, (i + 1) / (band.length + 1)));
+      });
+      const margin = 90;
+      const xOf = (id) => margin + (slot.get(id) ?? 0.5) * (width - 2 * margin);
+      // Release pins from a previous free-layout drag so the bands can take over.
+      nodes.forEach((n) => { n.fy = null; n.fx = null; });
+      sim = d3.forceSimulation(nodes)
+        .force("link", d3.forceLink(validEdges).id((d) => d.id).distance(110).strength(0.05))
+        .force("charge", d3.forceManyBody().strength(-120))
+        .force("x", d3.forceX((d) => xOf(d.id)).strength(0.6))
+        .force("y", d3.forceY((d) => yOf(d.id)).strength(1))
+        .force("collision", d3.forceCollide().radius(70))
+        .alphaDecay(0.04);
+    } else {
+      sim = d3.forceSimulation(nodes)
+        .force("link", d3.forceLink(validEdges).id((d) => d.id).distance(160).strength(0.3))
+        .force("charge", d3.forceManyBody().strength(-500))
+        .force("center", d3.forceCenter(width / 2, height / 2))
+        .force("collision", d3.forceCollide().radius(55))
+        .alphaDecay(0.02);
+    }
+    sim
       .on("tick", () => {
         nodes.forEach((n) => {
           n.x = Math.max(50, Math.min(width - 50, n.x));
@@ -84,7 +176,7 @@ export default function Graph({ nodes, edges, selectedId, highlightIds, onSelect
 
     simRef.current = sim;
     return () => sim.stop();
-  }, [nodes, edges]);
+  }, [nodes, edges, layout]);
 
   const handleDragStart = (e, node) => {
     const sim = simRef.current;
@@ -111,6 +203,18 @@ export default function Graph({ nodes, edges, selectedId, highlightIds, onSelect
   const highlightSet = new Set(highlightIds || []);
 
   return (
+    <>
+    <div style={{ position: "absolute", top: "10px", right: "12px", display: "flex", gap: "2px", zIndex: 2 }}>
+      {["layered", "free"].map((m) => (
+        <button key={m} onClick={() => setLayout(m)} style={{
+          background: layout === m ? "#FF6B3522" : "#141414",
+          border: `1px solid ${layout === m ? "#FF6B35" : "#222"}`,
+          color: layout === m ? "#FF6B35" : "#666", padding: "4px 8px", borderRadius: "3px",
+          fontSize: "9px", cursor: "pointer", fontFamily: "'JetBrains Mono', monospace",
+          letterSpacing: "1px", textTransform: "uppercase",
+        }}>{m}</button>
+      ))}
+    </div>
     <svg ref={svgRef} style={{ width: "100%", height: "100%", background: "transparent" }}>
       <defs>
         {Object.entries(EDGE_TYPES).map(([key, cfg]) => (
@@ -270,5 +374,6 @@ export default function Graph({ nodes, edges, selectedId, highlightIds, onSelect
         );
       })}
     </svg>
+    </>
   );
 }

@@ -36,9 +36,20 @@ export default function WorkspaceSidebar({
   onMerge,
   onNew,
   onRefresh,
+  onArchive,
 }) {
   const [forkInput, setForkInput] = useState("");
   const [showFork, setShowFork] = useState(false);
+  const [filter, setFilter] = useState("");
+  const [showArchived, setShowArchived] = useState(false);
+
+  const archivedCount = workspaces.filter((w) => w.archived).length;
+  const visible = workspaces.filter((w) => {
+    if (w.archived && !showArchived && w.name !== currentWorkspace) return false;
+    if (!filter.trim()) return true;
+    const f = filter.toLowerCase();
+    return w.name.toLowerCase().includes(f) || (w.thesis_text || "").toLowerCase().includes(f);
+  });
 
   const handleFork = (e) => {
     e.preventDefault();
@@ -73,7 +84,7 @@ export default function WorkspaceSidebar({
           color: COLOR_TEXT_DIM,
           textTransform: "uppercase",
         }}>
-          Workspaces ({workspaces.length})
+          Workspaces ({visible.length}{archivedCount && !showArchived ? ` · ${archivedCount} archived` : ""})
         </span>
         <div style={{ display: "flex", gap: "4px" }}>
           <button onClick={onRefresh} style={btn()}>↻</button>
@@ -90,8 +101,33 @@ export default function WorkspaceSidebar({
         </div>
       </div>
 
+      {/* Search + archived toggle */}
+      <div style={{ padding: "6px 8px", borderBottom: `1px solid ${COLOR_BORDER}`, display: "flex", gap: "4px", flexShrink: 0 }}>
+        <input
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="filter by name or thesis…"
+          style={{
+            flex: 1, background: "#141414", border: "1px solid #222", borderRadius: "3px",
+            color: COLOR_TEXT_BRIGHT, padding: "4px 6px", fontSize: "10px",
+            fontFamily: "'JetBrains Mono', monospace", outline: "none", minWidth: 0,
+          }}
+        />
+        {archivedCount > 0 && (
+          <button onClick={() => setShowArchived(!showArchived)} title="Show archived workspaces"
+            style={btn({ color: showArchived ? COLOR_ACCENT : COLOR_TEXT_DIM, borderColor: showArchived ? COLOR_ACCENT : "#333" })}>
+            ▤
+          </button>
+        )}
+      </div>
+
       {/* Workspace list */}
       <div style={{ flex: 1, overflow: "auto" }}>
+        {visible.length === 0 && workspaces.length > 0 && (
+          <div style={{ padding: "20px 12px", color: COLOR_TEXT_DIM, fontSize: "10px", textAlign: "center" }}>
+            No match.
+          </div>
+        )}
         {workspaces.length === 0 && (
           <div style={{
             padding: "20px 12px",
@@ -102,7 +138,7 @@ export default function WorkspaceSidebar({
             No workspaces yet. Click + New.
           </div>
         )}
-        {workspaces.map((w) => {
+        {visible.map((w) => {
           const isCurrent = w.name === currentWorkspace;
           return (
             <div
@@ -118,14 +154,24 @@ export default function WorkspaceSidebar({
             >
               <div style={{
                 fontSize: "10px",
-                color: isCurrent ? COLOR_ACCENT : COLOR_TEXT_BRIGHT,
+                color: isCurrent ? COLOR_ACCENT : (w.archived ? COLOR_TEXT_DIM : COLOR_TEXT_BRIGHT),
                 fontWeight: isCurrent ? 600 : 400,
                 marginBottom: "2px",
                 whiteSpace: "nowrap",
                 overflow: "hidden",
                 textOverflow: "ellipsis",
+                display: "flex", alignItems: "center", gap: "6px",
               }}>
-                {w.name}
+                <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>{w.archived ? "▤ " : ""}{w.name}</span>
+                {isCurrent && onArchive && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onArchive(w.name, !w.archived); }}
+                    title={w.archived ? "Unarchive" : "Archive (hide from the list; nothing is deleted)"}
+                    style={btn({ padding: "1px 4px", fontSize: "8px" })}
+                  >
+                    {w.archived ? "unarchive" : "archive"}
+                  </button>
+                )}
               </div>
               {w.thesis_text && (
                 <div style={{

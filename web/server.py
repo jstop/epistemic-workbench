@@ -27,8 +27,13 @@ from epist.engine import (
     surface_assumptions, stress_test, bayesian_update, compute_calibration,
     propagate_confidence,
 )
-from epist import graph_io, provenance, ingest
+from epist import graph_io, provenance, ingest, library_client
 from epist.provenance import provenance_kind
+from epist.engine import display_text
+from epist.actor import declare_channel
+# The browser is the owner's own channel into the workspaces; unlike an AI
+# surface, what is written here is the owner acting (through the web UI).
+declare_channel(os.environ.get("EPIST_WEB_ACTOR", "owner:web"))
 # Sync utilities (no LLM calls)
 from epist.llm import (
     compute_summary,
@@ -263,6 +268,25 @@ class IngestRequest(BaseModel):
 class CommitProposalRequest(BaseModel):
     accepted_node_ids: list[str]
 
+class RetireRequest(BaseModel):
+    claim_id: str
+    reason: str = ""
+
+class ArchiveRequest(BaseModel):
+    archived: bool = True
+
+class LinkBeliefRequest(BaseModel):
+    belief_id: str
+    unlink: bool = False
+
+class CaptureBeliefRequest(BaseModel):
+    belief_id: str
+    claim: str
+    cluster: str
+    note: str = ""
+    volatility: str = "preference"
+    links: list[str] = []
+
 
 # ── Workspaces (top-level listing/create) ────────────────────────────
 
@@ -284,6 +308,7 @@ def list_workspaces():
             results.append({
                 "name": d.name,
                 "thesis_text": thesis_text,
+                "archived": (d / ".archived").exists(),
                 "is_git": s.is_git_repo(),
                 "branch": s.git_current_branch() if s.is_git_repo() else "",
                 "claims": len(s.claims),
@@ -498,10 +523,11 @@ def arguments_for_node(name: str, eo_id: str, s: Store = Depends(get_store)):
             results.append({
                 **_serialize(a),
                 "defeaters": [
-                    {"index": i, "type": d.type.value, "description": d.description,
+                    {"index": i, "type": d.type.value, "description": display_text(d.description),
                      "status": d.status.value, "response": d.response}
                     for i, d in enumerate(a.defeaters)
                 ],
+                "support_mode": getattr(a, "support_mode", "independent"),
             })
     return results
 
@@ -514,7 +540,7 @@ def list_defeaters(name: str, eo_id: str, s: Store = Depends(get_store)):
     if not arg:
         raise HTTPException(404, "Argument not found")
     return [
-        {"index": i, "type": d.type.value, "description": d.description,
+        {"index": i, "type": d.type.value, "description": display_text(d.description),
          "status": d.status.value, "response": d.response}
         for i, d in enumerate(arg.defeaters)
     ]
@@ -620,7 +646,7 @@ def get_graph(name: str, s: Store = Depends(get_store)):
                     "index": i,
                     "type": d.type.value,
                     "status": d.status.value,
-                    "description": d.description,
+                    "description": display_text(d.description),
                     "response": d.response,
                 })
 
@@ -1362,6 +1388,99 @@ def commit_proposal_route(name: str, proposal_id: str, body: CommitProposalReque
     if s.is_git_repo():
         s.git_commit(f"[ingest] commit {len(body.accepted_node_ids)} nodes from {proposal_id}")
     return {"ok": True, **result}
+
+
+# ── F4: retire (withdraw without deleting) ───────────────────────────
+
+@app.post("/api/workspaces/{name}/retire")
+def retire_route(name: str, body: RetireRequest, s: Store = Depends(get_store)):
+    try:
+        r = graph_io.retire(s, body.claim_id, reason=body.reason)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    _git_commit_manual(s, f"Retire {r['id'][:8]}: {body.reason[:50]}")
+    return {"ok": True, **r}
+
+
+# ── Workspace archiving (a marker file; the workspace itself is untouched) ──
+
+@app.post("/api/workspaces/{name}/archive")
+def archive_route(name: str, body: ArchiveRequest):
+    path = _resolve_workspace(name)
+    if not path.exists():
+        raise HTTPException(404, f"Workspace '{name}' not found")
+    marker = path / ".archived"
+    if body.archived:
+        marker.write_text("archived from the web UI\n")
+    elif marker.exists():
+        marker.unlink()
+    return {"ok": True, "name": name, "archived": body.archived}
+
+
+# ── Living-library bridge (links, not copies) ────────────────────────
+
+@app.get("/api/library/status")
+def library_status():
+    return {"available": library_client.available(), "reason": library_client.unavailable_reason()}
+
+
+@app.get("/api/library/beliefs")
+def library_search(q: str = "", cluster: str = "", limit: int = 30):
+    if not library_client.available():
+        raise HTTPException(503, library_client.unavailable_reason() or "library unavailable")
+    return library_client.search(q, cluster, limit)
+
+
+@app.get("/api/workspaces/{name}/beliefs")
+def workspace_beliefs(name: str, s: Store = Depends(get_store)):
+    ids = list((s.foundations.get("library_beliefs") or {}).keys()) if isinstance(s.foundations.get("library_beliefs"), dict) else list(s.foundations.get("library_beliefs") or [])
+    found = library_client.get_many(ids) if (ids and library_client.available()) else []
+    known = {b["id"] for b in found}
+    return {
+        "available": library_client.available(),
+        "beliefs": found,
+        "missing": [i for i in ids if i not in known],
+    }
+
+
+@app.post("/api/workspaces/{name}/beliefs")
+def workspace_link_belief(name: str, body: LinkBeliefRequest, s: Store = Depends(get_store)):
+    ids = s.foundations.get("library_beliefs") or []
+    if isinstance(ids, dict):
+        ids = list(ids.keys())
+    if body.unlink:
+        ids = [i for i in ids if i != body.belief_id]
+    elif body.belief_id not in ids:
+        ids.append(body.belief_id)
+    s.foundations["library_beliefs"] = ids
+    s.save()
+    _git_commit_manual(s, f"{'Unlink' if body.unlink else 'Link'} library belief {body.belief_id}")
+    return {"ok": True, "library_beliefs": ids}
+
+
+@app.post("/api/workspaces/{name}/capture-belief")
+def workspace_capture_belief(name: str, body: CaptureBeliefRequest, s: Store = Depends(get_store)):
+    """Capture the thesis into the living library as a derived belief grounded in
+    this workspace, then link it back. Written under this process's agent
+    identity — the owner stands behind it later, from their own channel."""
+    commit = None
+    if s.is_git_repo():
+        log = s.git_log(max_count=1)
+        commit = log[0]["hash"][:12] if log else None
+    r = library_client.capture_thesis(
+        belief_id=body.belief_id, claim=body.claim, cluster=body.cluster,
+        workspace=name, commit=commit, note=body.note, links=body.links,
+        volatility=body.volatility,
+    )
+    if not r.get("ok"):
+        raise HTTPException(400, r.get("reason", "capture failed"))
+    ids = s.foundations.get("library_beliefs") or []
+    if body.belief_id not in ids:
+        ids.append(body.belief_id)
+        s.foundations["library_beliefs"] = ids
+        s.save()
+        _git_commit_manual(s, f"Capture thesis as library belief {body.belief_id}")
+    return r
 
 
 # ── Static frontend ──────────────────────────────────────────────────
