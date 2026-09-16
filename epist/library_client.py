@@ -132,6 +132,20 @@ def interpreter_id(component: str, model: str | None = None) -> str:
     return f"epistemic-workbench/{component}@{model or __version__}"
 
 
+def code_version() -> str:
+    """The workbench code's git revision, stamped into every run's params."""
+    try:
+        import subprocess
+        root = Path(__file__).resolve().parent.parent
+        sha = subprocess.run(["git", "-C", str(root), "rev-parse", "--short=12", "HEAD"],
+                             capture_output=True, text=True, timeout=5).stdout.strip()
+        dirty = subprocess.run(["git", "-C", str(root), "status", "--porcelain"],
+                               capture_output=True, text=True, timeout=5).stdout.strip() != ""
+        return f"{sha}{'+dirty' if dirty else ''}" if sha else "unknown"
+    except Exception:
+        return "unknown"
+
+
 def record_run(*, kind: str, interpreter: str, inputs: list[str] | None = None,
                outputs: list[dict] | None = None, params: dict | None = None,
                note: str = "", run_id: str | None = None,
@@ -145,6 +159,8 @@ def _record_run(kind, interpreter, inputs, outputs, params, note, run_id, starte
     eng = _load()
     if eng is None:
         return None
+    params = dict(params or {})
+    params.setdefault("workbench_code", code_version())
     try:
         return eng.record_run(kind=kind, interpreter=interpreter,
                               inputs=[i for i in (inputs or []) if i], outputs=outputs,
@@ -252,12 +268,13 @@ def _record_workspace_run(store, name, kind, interpreter, inputs, params, note, 
             metadata={"kind": "workspace-snapshot", "workspace": name, "commit": commit,
                       "thesis_hash": claim_hash(thesis_text) if thesis_text else None,
                       "source": "epistemic-workbench", "produced_by": kind})
-        rid = lib.record_run(kind=kind, interpreter=interpreter,
+        rid = eng.record_run(kind=kind, interpreter=interpreter,
                              inputs=[i for i in (inputs or []) if i],
                              outputs=[{"type": "workspace-snapshot", "id": eid, "uri": uri,
                                        "claims": len(store.claims), "evidence": len(store.evidence),
                                        "arguments": len(store.arguments)}],
-                             params=dict(params or {}, workspace=name, commit=commit),
+                             params=dict(params or {}, workspace=name, commit=commit,
+                                         workbench_code=code_version()),
                              note=note, started_at=started_at)
         return {"run_id": rid, "evidence_id": eid, "uri": uri}
     except Exception as e:
