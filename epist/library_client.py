@@ -210,6 +210,113 @@ def _runs_for_workspace(name):
     return out
 
 
+# ── lenses for the app: status, belief detail, trace ─────────────────────
+
+def status() -> dict:
+    return _in_library_thread(_status)
+
+
+def _status():
+    eng = _load()
+    if eng is None:
+        return {}
+    st = eng.get_log().state()
+    return {"branch": eng.branch(), "db": eng.db_path(), "library_code": eng.code_version(),
+            "workbench_code": code_version(), "writes_as": eng.resolve_actor(),
+            "counts": {"beliefs": len(st["beliefs"]), "evidence": len(st["evidence"]),
+                       "interpretations": len(st["interpretations"]), "runs": len(st["runs"])}}
+
+
+def belief_detail(belief_id: str) -> dict | None:
+    return _in_library_thread(_belief_detail, belief_id)
+
+
+def _belief_detail(belief_id):
+    eng = _load()
+    if eng is None:
+        return None
+    v, _ = eng.find(belief_id)
+    if v is None:
+        return None
+    import datetime as dt
+    st = eng.get_log().state()
+    stamped = eng.stamped(v, dt.date.today(), by_id=eng.all_views_by_id())
+    raw = st["beliefs"][belief_id]
+    log = eng.get_log()
+    evidence = []
+    for eid in raw.get("evidence_ids", []):
+        e = st["evidence"].get(eid) or {}
+        spans = [g for g in raw.get("grounding", []) if g.get("evidence_id") == eid]
+        evidence.append({"evidence_id": eid, "uri": e.get("uri"), "media_type": e.get("media_type"),
+                         "recorded_at": e.get("recorded_at"), "kind": (e.get("metadata") or {}).get("kind"),
+                         "content_available": bool(e.get("digest") and log.store.has(e["digest"])),
+                         "spans": [(g.get("quote") or "")[:200] for g in spans]})
+    interps = [{"id": i["interpretation_id"], "kind": i["kind"], "statement": i["statement"][:200],
+                "interpreter": i["interpreter"]}
+               for i in st["interpretations"].values() if belief_id in (i.get("subjects") or [])]
+    runs = [{"run_id": r["run_id"], "kind": r["kind"], "interpreter": r["interpreter"], "recorded_at": r.get("recorded_at")}
+            for r in st["runs"].values() if any(o.get("id") == belief_id for o in r.get("outputs", []))]
+    return {**_slim(stamped), "anchor_cost": stamped.get("anchor_cost"), "verified_at": stamped.get("verified_at"),
+            "contested": stamped.get("contested"), "retired": v.get("retired"),
+            "authorship": stamped.get("authorship"), "claim_history": raw.get("claim_history", []),
+            "events": stamped.get("events", []), "evidence": evidence, "interpretations": interps, "runs": runs,
+            "links": stamped.get("links", [])}
+
+
+def trace_claim(text: str, claim_hash_: str, limit: int, workspaces_dir) -> dict:
+    return _in_library_thread(_trace_claim, text, claim_hash_, limit, workspaces_dir)
+
+
+def _trace_claim(text, claim_hash_, limit, workspaces_dir):
+    eng = _load()
+    if eng is None:
+        return {}
+    h = claim_hash_ or claim_hash(text)
+    q = (text or "").lower()
+    st = eng.get_log().state()
+    import datetime as dt
+    ref = dt.date.today(); by_id = eng.all_views_by_id()
+    out = {"claim_hash": h, "text": text, "beliefs": [], "interpretations": [], "workspaces": [], "runs": []}
+    for b, _ in eng.load_all(include_retired=True):
+        bh = claim_hash(b.get("claim") or "")
+        if bh == h or (q and q in (b.get("claim") or "").lower()):
+            s = eng.stamped(b, ref, by_id=by_id)
+            out["beliefs"].append({**_slim(s), "exact": bh == h})
+    for i in st["interpretations"].values():
+        ih = (i.get("metadata") or {}).get("claim_hash") or claim_hash(i.get("statement") or "")
+        if ih == h or (q and q in (i.get("statement") or "").lower()):
+            out["interpretations"].append({"id": i["interpretation_id"], "kind": i["kind"], "statement": i["statement"][:200],
+                                           "interpreter": i["interpreter"], "exact": ih == h,
+                                           "run_id": (i.get("metadata") or {}).get("run_id"),
+                                           "grounding": [{"evidence_id": g["evidence_id"], "quote": (g.get("quote") or "")[:120]} for g in i.get("grounding", [])]})
+    from epist.store import Store
+    root = Path(workspaces_dir)
+    if root.exists():
+        for d in sorted(root.iterdir()):
+            if not d.is_dir() or d.name.startswith("."):
+                continue
+            try:
+                s = Store(d)
+            except Exception:
+                continue
+            for c in s.claims.values():
+                ctext = (c.notes or f"{c.subject} {c.predicate} {c.object}").strip()
+                ch = claim_hash(ctext)
+                if ch == h or (q and q in ctext.lower()):
+                    out["workspaces"].append({"workspace": d.name, "claim_id": c.id, "text": ctext[:160],
+                                              "node_type": getattr(c, "node_type", "claim"), "is_root": c.is_root,
+                                              "status": getattr(c, "status", None), "exact": ch == h})
+    run_ids = {x.get("run_id") for x in out["interpretations"] if x.get("run_id")}
+    bids = {b["id"] for b in out["beliefs"]}
+    for r in st["runs"].values():
+        if r["run_id"] in run_ids or any(o.get("id") in bids for o in r.get("outputs", [])):
+            out["runs"].append({"run_id": r["run_id"], "kind": r["kind"], "interpreter": r["interpreter"],
+                                "recorded_at": r.get("recorded_at"), "actor": r.get("actor")})
+    for k in ("beliefs", "interpretations", "workspaces", "runs"):
+        out[k] = out[k][:limit]
+    return out
+
+
 # ── workspace snapshots ────────────────────────────────────────────────
 
 def snapshot_text(store, name: str, commit: str | None) -> str:

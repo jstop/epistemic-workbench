@@ -5,6 +5,7 @@ import InspectPanel from "./components/InspectPanel.jsx";
 import AnalysisPanel from "./components/AnalysisPanel.jsx";
 import SummaryPanel from "./components/SummaryPanel.jsx";
 import SourcesPanel from "./components/SourcesPanel.jsx";
+import LibraryPanel from "./components/LibraryPanel.jsx";
 import WorkspaceSidebar from "./components/WorkspaceSidebar.jsx";
 import NewWorkspaceModal from "./components/NewWorkspaceModal.jsx";
 import CompareModal from "./components/CompareModal.jsx";
@@ -334,6 +335,7 @@ export default function App() {
               { key: "inspect", label: selectedNode ? `Inspect: ${selectedNode.label.slice(0, 30)}${selectedNode.label.length > 30 ? "…" : ""}` : "Inspect" },
               { key: "add", label: "Add" },
               { key: "sources", label: "Sources" },
+              { key: "library", label: "Library" },
               { key: "analysis", label: "Analysis" },
             ].map((tab) => (
               <button
@@ -512,6 +514,18 @@ export default function App() {
                   workspace={currentWorkspace}
                   onSelectNode={handleSelectNode}
                   onUpdated={handleUpdated}
+                />
+              </div>
+
+              {/* Library — beliefs + trace (phase 5) */}
+              <div style={{
+                flex: 1, overflow: "auto",
+                padding: "20px 28px",
+                display: panel === "library" ? "block" : "none",
+              }}>
+                <LibraryPanel
+                  refreshKey={analysisKey}
+                  onSelectWorkspace={(name) => { handleSelectWorkspace(name); setPanel("summary"); }}
                 />
               </div>
 

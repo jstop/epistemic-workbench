@@ -6,11 +6,20 @@ repo (forks are branches, every change is a tagged commit). The engine computes
 ATMS status, coherence checks, blind spots, and conjunction-aware confidence
 propagation; nothing derived is ever persisted.
 
-Two surfaces share the same engine and workspaces:
+Three surfaces share the same engine and workspaces:
 
-- **MCP server** — `epist/mcp_server.py`, wired into Claude Desktop as
-  `epistemic-workbench` (32 tools).
+- **Episteme, the unified MCP server** — `episteme_server.py`: one server over
+  the whole pipeline, composing the living library's tools (`belief_*`), this
+  workbench's tools (`argue_*`), and a trace lens neither had (`trace_claim`,
+  `trace_evidence`, `trace_workspace`, `trace_runs`, `episteme_status`). It
+  serves whichever library branch `EPISTEMIC_BRANCH` names, so it is wired into
+  Claude Code and Claude Desktop as `episteme-dev` (branch `dev`) beside the
+  older per-system servers until dev is promoted. `pattern_*` (the mapper) is
+  reserved, not served.
+- **MCP server (workbench only)** — `epist/mcp_server.py`, wired into Claude
+  Desktop as `epistemic-workbench` (32 tools).
 - **Web UI** — `web/server.py` (FastAPI) serving the React app in `web/frontend`.
+  Run with `EPISTEMIC_BRANCH=dev make web` to read the dev library build.
 
 ```bash
 make web      # build the frontend and serve on http://127.0.0.1:8111
@@ -30,6 +39,7 @@ Workspaces live in `~/workspace/epistemic/workspaces` (override with
 | Inspect | A node's stored and derived confidence (with one-click adopt), provenance (attach a real source to flip asserted → recorded), support mode per supporting argument, defeaters, manual interventions, lifecycle (supersede, retire, typed links). Hard delete is offered only for nodes nothing references |
 | Add | Plain-text nodes with a dialectical role; structured claim/evidence/argument forms (argument gets a support mode); typed links; import/export of the lossless `epist-graph/v1` JSON or a flat `{nodes, edges}` document |
 | Sources | Unsourced-evidence audit; document ingestion (LLM proposes claims/arguments/objections grounded in verbatim spans; nothing is committed until you accept nodes) |
+| Library | The living library on the served branch: search beliefs by stance, open one to see its envelope, whose word it is, evidence with located spans, claim history, and the runs that touched it; "Where did this come from" traces a claim by content hash or text across beliefs, interpretations, workspaces and runs. Read-only: confirm / rephrase / retire stay in the library's review page under your own channel |
 | Analysis | Coherence checks, blind spots, stress test and assumptions for the selected node |
 
 `CURRENT_MODEL.md` is the as-built description of the object model and the

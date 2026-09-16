@@ -1437,7 +1437,30 @@ def archive_route(name: str, body: ArchiveRequest):
 
 @app.get("/api/library/status")
 def library_status():
-    return {"available": library_client.available(), "reason": library_client.unavailable_reason()}
+    """Which library build the app is reading, and its shape."""
+    if not library_client.available():
+        return {"available": False, "reason": library_client.unavailable_reason()}
+    return {"available": True, **library_client.status()}
+
+
+@app.get("/api/library/belief/{belief_id}")
+def library_belief(belief_id: str):
+    """One belief in full: stance, envelope, evidence with spans, history, and
+    the interpretations and runs that touch it."""
+    if not library_client.available():
+        raise HTTPException(503, library_client.unavailable_reason() or "library unavailable")
+    r = library_client.belief_detail(belief_id)
+    if not r:
+        raise HTTPException(404, f"no belief {belief_id}")
+    return r
+
+
+@app.get("/api/library/trace")
+def library_trace(q: str = "", claim_hash: str = "", limit: int = 20):
+    """Trace a claim across beliefs, interpretations, workspaces and runs."""
+    if not library_client.available():
+        raise HTTPException(503, library_client.unavailable_reason() or "library unavailable")
+    return library_client.trace_claim(q, claim_hash, limit, WORKSPACES_DIR)
 
 
 @app.get("/api/library/beliefs")

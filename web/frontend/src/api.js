@@ -136,3 +136,7 @@ export const getWorkspaceRuns = (name) => request(`${ws(name)}/runs`);
 export const snapshotWorkspace = (name) => post(`${ws(name)}/snapshot`, {});
 export const groundBelief = (name, data) => post(`${ws(name)}/ground-belief`, data);
 export const captureBelief = (name, data) => post(`${ws(name)}/capture-belief`, data);
+
+// ── Library lens (phase 5) ──────────────────────────────────────────
+export const getBelief = (id) => request(`/library/belief/${encodeURIComponent(id)}`);
+export const traceClaim = (q) => request(`/library/trace?q=${encodeURIComponent(q)}`);
