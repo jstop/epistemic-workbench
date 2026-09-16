@@ -25,7 +25,10 @@ from epist.store import Store, _serialize
 from epist.engine import (
     compute_atms, ATMSStatus, check_coherence, find_blind_spots,
     surface_assumptions, stress_test, bayesian_update, compute_calibration,
+    propagate_confidence,
 )
+from epist import graph_io, provenance, ingest
+from epist.provenance import provenance_kind
 # Sync utilities (no LLM calls)
 from epist.llm import (
     compute_summary,
@@ -60,7 +63,7 @@ app.add_middleware(
 
 WORKSPACES_DIR = Path(os.environ.get(
     "EPIST_WORKSPACES",
-    Path.home() / "EPISTEMIC_TOOLS" / "workspaces",
+    Path.home() / "workspace" / "epistemic" / "workspaces",
 ))
 
 
@@ -209,6 +212,56 @@ class SwitchRequest(BaseModel):
 class MergeRequest(BaseModel):
     source_branch: str
     mode: str = "synthesize"  # pick | synthesize
+
+# ── F1–F5 request models ──
+
+class QuickClaimRequest(BaseModel):
+    text: str
+    node_type: str = "claim"        # claim | thesis | objection | concession
+    confidence: float = 0.7
+    status: Optional[str] = None    # live/defeated/superseded/conceded/rebutted/open
+    modality: str = "empirical"
+
+class AuthoredArgumentRequest(BaseModel):
+    conclusion_id: str
+    premise_ids: list[str]
+    pattern: str = "modus_ponens"
+    label: str = ""
+    confidence: float = 0.7
+    support_mode: str = "conjunctive"
+
+class LinkRequest(BaseModel):
+    from_id: str
+    to_id: str
+    relation: str
+
+class SupportModeRequest(BaseModel):
+    argument_id: str
+    mode: str
+
+class SupersedeRequest(BaseModel):
+    old_claim_id: str
+    new_claim_id: str
+    reason: str = ""
+
+class ImportRequest(BaseModel):
+    graph: dict
+    mode: str = "merge"
+
+class AttachSourceRequest(BaseModel):
+    node_id: str
+    source_id: Optional[int] = None
+    url: str = ""
+    quote: str = ""
+    source_type: str = "document"
+
+class IngestRequest(BaseModel):
+    source_text: str = ""
+    url: str = ""
+    title: str = ""
+
+class CommitProposalRequest(BaseModel):
+    accepted_node_ids: list[str]
 
 
 # ── Workspaces (top-level listing/create) ────────────────────────────
@@ -503,17 +556,26 @@ def update_defeater(name: str, eo_id: str, idx: int, body: DefeaterUpdate, s: St
 @app.get("/api/workspaces/{name}/graph")
 def get_graph(name: str, s: Store = Depends(get_store)):
     atms = compute_atms(s)
+    try:
+        derived = propagate_confidence(s, atms)
+    except Exception:
+        derived = {}
     nodes = []
     edges = []
 
     for cid, c in s.claims.items():
+        label = f"{c.subject} {c.predicate} {c.object}".strip()
         nodes.append({
             "id": cid,
             "type": "claim",
-            "label": f"{c.subject} {c.predicate} {c.object}",
+            "node_type": getattr(c, "node_type", "claim") or "claim",
+            "label": label or (c.notes or "")[:60],
             "confidence": c.confidence.level,
+            "derived": derived.get(cid),
             "modality": c.modality.value,
             "atms": atms.get(cid, "unknown"),
+            "status": getattr(c, "status", None),
+            "killed_by": getattr(c, "killed_by", None),
             "notes": c.notes,
             "is_root": c.is_root,
         })
@@ -522,11 +584,15 @@ def get_graph(name: str, s: Store = Depends(get_store)):
         nodes.append({
             "id": eid,
             "type": "evidence",
+            "node_type": "evidence",
             "label": e.title,
             "confidence": e.reliability,
+            "derived": derived.get(eid),
             "atms": atms.get(eid, "unknown"),
             "notes": e.description,
             "source": e.source,
+            "provenance": provenance_kind(e),
+            "provenance_detail": getattr(e, "provenance", None),
         })
 
     node_index = {n["id"]: n for n in nodes}
@@ -542,6 +608,7 @@ def get_graph(name: str, s: Store = Depends(get_store)):
                     "label": a.label,
                     "pattern": a.pattern.value,
                     "confidence": a.confidence.level,
+                    "support_mode": getattr(a, "support_mode", "independent"),
                 })
         # Attach full per-defeater records to the conclusion node
         for i, d in enumerate(a.defeaters):
@@ -565,6 +632,22 @@ def get_graph(name: str, s: Store = Depends(get_store)):
                     "target": assumed_id,
                     "type": "assumes",
                 })
+
+    # F1 — generic typed edges (refutes / rebuts / concedes / grounds / narrows /
+    # supersedes). 'supports' edges are already mirrored as arguments above, so
+    # they are skipped here to avoid drawing the same relation twice.
+    for eid, e in getattr(s, "edges", {}).items():
+        rel = e.rel.value if hasattr(e.rel, "value") else str(e.rel)
+        if rel == "supports":
+            continue
+        if e.from_id in node_index and e.to in node_index:
+            edges.append({
+                "source": e.from_id,
+                "target": e.to,
+                "type": rel,
+                "edge_id": eid,
+                "notes": getattr(e, "notes", ""),
+            })
 
     return {"nodes": nodes, "edges": edges}
 
@@ -694,11 +777,17 @@ async def accept_enhanced_thesis_endpoint(name: str, body: AcceptEnhancedRequest
     if body.thesis_id not in s.claims:
         raise HTTPException(404, "Original thesis not found")
 
-    s.clear()
+    # F4 — non-destructive revision: the prior thesis and its subgraph stay in
+    # the graph marked superseded; only the root flag moves.
+    s.claims[body.thesis_id].is_root = False
+    s.save()
     try:
         new_thesis_id = await generate_full_graph_async(s, body.enhanced_thesis)
     except Exception as e:
+        s.claims[body.thesis_id].is_root = True
+        s.save()
         raise HTTPException(500, f"LLM call failed: {e}")
+    graph_io.supersede(s, body.thesis_id, new_thesis_id, reason=body.rationale)
 
     try:
         new_summary = compute_summary(s, new_thesis_id)
@@ -1083,6 +1172,196 @@ async def merge_branches(name: str, body: MergeRequest):
 def git_log(name: str, max_count: int = 50, s: Store = Depends(get_store)):
     """Return commit history for the current branch."""
     return s.git_log(max_count=max_count)
+
+
+# ── F1: direct authoring + import/export ─────────────────────────────
+
+@app.post("/api/workspaces/{name}/add-claim")
+def add_claim_route(name: str, body: QuickClaimRequest, s: Store = Depends(get_store)):
+    if not s.is_git_repo():
+        s.git_init()
+    try:
+        c = graph_io.add_claim(s, body.text, node_type=body.node_type,
+                               confidence=body.confidence,
+                               status=(body.status or None), modality=body.modality)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    s.git_commit(f"[manual] Add {body.node_type}: {body.text[:50]}")
+    return {"ok": True, "id": c.id, "node_type": body.node_type}
+
+
+@app.post("/api/workspaces/{name}/add-argument")
+def add_argument_route(name: str, body: AuthoredArgumentRequest, s: Store = Depends(get_store)):
+    if not s.is_git_repo():
+        s.git_init()
+    try:
+        a = graph_io.add_argument(s, body.conclusion_id, body.premise_ids,
+                                  pattern=body.pattern, label=body.label,
+                                  confidence=body.confidence,
+                                  support_mode=body.support_mode)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    s.git_commit(f"[manual] Add argument: {body.label or a.id[:12]}")
+    return {"ok": True, "id": a.id}
+
+
+@app.post("/api/workspaces/{name}/link")
+def link_route(name: str, body: LinkRequest, s: Store = Depends(get_store)):
+    if not s.is_git_repo():
+        s.git_init()
+    try:
+        e = graph_io.link(s, body.from_id, body.to_id, body.relation)
+    except ValueError as ex:
+        raise HTTPException(400, str(ex))
+    s.git_commit(f"[manual] Link {body.relation}: {e.from_id[:8]}→{e.to[:8]}")
+    return {"ok": True, "id": e.id, "from_id": e.from_id, "to": e.to, "relation": body.relation}
+
+
+@app.post("/api/workspaces/{name}/set-support-mode")
+def set_support_mode_route(name: str, body: SupportModeRequest, s: Store = Depends(get_store)):
+    try:
+        a = graph_io.set_support_mode(s, body.argument_id, body.mode)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    _git_commit_manual(s, f"Set support_mode={body.mode} on {body.argument_id[:12]}")
+    derived = propagate_confidence(s)
+    return {"ok": True, "argument_id": a.id, "mode": body.mode,
+            "conclusion_derived": derived.get(a.conclusion)}
+
+
+@app.post("/api/workspaces/{name}/supersede")
+def supersede_route(name: str, body: SupersedeRequest, s: Store = Depends(get_store)):
+    try:
+        r = graph_io.supersede(s, body.old_claim_id, body.new_claim_id, reason=body.reason)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    _git_commit_manual(s, f"Supersede {r['old'][:8]} with {r['new'][:8]}")
+    return {"ok": True, **r}
+
+
+@app.get("/api/workspaces/{name}/export")
+def export_route(name: str, s: Store = Depends(get_store)):
+    return graph_io.export_graph(s)
+
+
+@app.post("/api/workspaces/{name}/import")
+def import_route(name: str, body: ImportRequest):
+    s = get_or_create_store(name)
+    if not s.is_git_repo():
+        s.git_init()
+    try:
+        summary = graph_io.import_graph(s, body.graph, mode=body.mode)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    s.git_commit(f"[manual] Import graph ({summary.get('mode')}, mode={body.mode})")
+    return {"ok": True, **summary}
+
+
+@app.get("/api/workspaces/{name}/analysis/propagation")
+def propagation_route(name: str, s: Store = Depends(get_store)):
+    """F3 — derived (propagated) confidence for every object. Never persisted."""
+    return propagate_confidence(s)
+
+
+# ── F2: provenance ───────────────────────────────────────────────────
+
+@app.get("/api/workspaces/{name}/unsourced")
+def unsourced_route(name: str, s: Store = Depends(get_store)):
+    return {"rows": provenance.list_unsourced(s), "counts": provenance.provenance_counts(s)}
+
+
+@app.post("/api/workspaces/{name}/attach-source")
+def attach_source_route(name: str, body: AttachSourceRequest, s: Store = Depends(get_store)):
+    result = provenance.attach_source(
+        s, body.node_id,
+        source_id=(body.source_id or None),
+        url=(body.url or None),
+        quote=(body.quote or None),
+        source_type=body.source_type,
+    )
+    if result.get("ok"):
+        _git_commit_manual(s, f"Attach source to evidence {body.node_id[:12]}")
+        return {"ok": True, **result}
+    # Recorded provenance is never faked: report why it stayed asserted.
+    return {"ok": False, "reason": result.get("reason", "unknown error")}
+
+
+# ── F5: corpus ingestion (propose-then-curate) ───────────────────────
+
+import threading, time, uuid
+
+_jobs: dict = {}  # job_id -> {status, workspace, started, finished, result, error}
+
+
+def _run_job(job_id: str, fn, *args):
+    def _target():
+        try:
+            _jobs[job_id]["result"] = fn(*args)
+            _jobs[job_id]["status"] = "completed"
+        except Exception as e:
+            _jobs[job_id]["status"] = "failed"
+            _jobs[job_id]["error"] = str(e)
+        finally:
+            _jobs[job_id]["finished"] = time.time()
+    threading.Thread(target=_target, daemon=True).start()
+
+
+def _do_ingest(name: str, source_text: str, url: str, title: str) -> dict:
+    s = get_or_create_store(name)
+    if not s.is_git_repo():
+        s.git_init()
+    source_ref = {"url": url} if url else None
+    result = ingest.ingest_document(
+        s, source_text=source_text or None, source_ref=source_ref,
+        extractor=ingest.llm_extractor, title=(title or None),
+    )
+    s.git_commit(f"[ingest] proposal {result['proposal_id']} from source")
+    return result
+
+
+@app.post("/api/workspaces/{name}/ingest")
+def ingest_route(name: str, body: IngestRequest):
+    if not (body.source_text or body.url):
+        raise HTTPException(400, "provide source_text (and optionally url/title)")
+    job_id = f"ing-{uuid.uuid4().hex[:8]}"
+    _jobs[job_id] = {"status": "running", "workspace": name,
+                     "started": time.time(), "finished": None,
+                     "result": None, "error": None}
+    _run_job(job_id, _do_ingest, name, body.source_text, body.url, body.title)
+    return {"ok": True, "job_id": job_id}
+
+
+@app.get("/api/jobs/{job_id}")
+def job_status_route(job_id: str):
+    job = _jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Unknown job")
+    return {"job_id": job_id, **job}
+
+
+@app.get("/api/workspaces/{name}/proposals")
+def list_proposals_route(name: str, s: Store = Depends(get_store)):
+    return ingest.list_proposals(s)
+
+
+@app.get("/api/workspaces/{name}/proposals/{proposal_id}")
+def review_proposal_route(name: str, proposal_id: str, s: Store = Depends(get_store)):
+    try:
+        return ingest.review_proposal(s, proposal_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.post("/api/workspaces/{name}/proposals/{proposal_id}/commit")
+def commit_proposal_route(name: str, proposal_id: str, body: CommitProposalRequest,
+                          s: Store = Depends(get_store)):
+    try:
+        result = ingest.commit_proposal(s, proposal_id, body.accepted_node_ids)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if s.is_git_repo():
+        s.git_commit(f"[ingest] commit {len(body.accepted_node_ids)} nodes from {proposal_id}")
+    return {"ok": True, **result}
 
 
 # ── Static frontend ──────────────────────────────────────────────────

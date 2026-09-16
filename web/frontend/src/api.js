@@ -95,3 +95,28 @@ export const compareBranches = (name, other) =>
   request(`${ws(name)}/compare/${encodeURIComponent(other)}`);
 export const mergeBranches = (name, sourceBranch, mode = "synthesize") =>
   post(`${ws(name)}/merge`, { source_branch: sourceBranch, mode });
+
+// ── F1: direct authoring + import/export ────────────────────────────
+export const addClaimText = (name, data) => post(`${ws(name)}/add-claim`, data);
+export const addAuthoredArgument = (name, data) => post(`${ws(name)}/add-argument`, data);
+export const link = (name, data) => post(`${ws(name)}/link`, data);
+export const setSupportMode = (name, data) => post(`${ws(name)}/set-support-mode`, data);
+export const supersede = (name, data) => post(`${ws(name)}/supersede`, data);
+export const exportGraph = (name) => request(`${ws(name)}/export`);
+export const importGraph = (name, graph, mode = "merge") =>
+  post(`${ws(name)}/import`, { graph, mode });
+
+// ── F3: propagated confidence ───────────────────────────────────────
+export const getPropagation = (name) => request(`${ws(name)}/analysis/propagation`);
+
+// ── F2: provenance ──────────────────────────────────────────────────
+export const getUnsourced = (name) => request(`${ws(name)}/unsourced`);
+export const attachSource = (name, data) => post(`${ws(name)}/attach-source`, data);
+
+// ── F5: ingestion (propose-then-curate) ─────────────────────────────
+export const ingest = (name, data) => post(`${ws(name)}/ingest`, data);
+export const getJob = (jobId) => request(`/jobs/${jobId}`);
+export const listProposals = (name) => request(`${ws(name)}/proposals`);
+export const getProposal = (name, id) => request(`${ws(name)}/proposals/${id}`);
+export const commitProposal = (name, id, acceptedNodeIds) =>
+  post(`${ws(name)}/proposals/${id}/commit`, { accepted_node_ids: acceptedNodeIds });

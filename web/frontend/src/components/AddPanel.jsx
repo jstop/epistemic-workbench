@@ -7,6 +7,32 @@ const PATTERNS = [
   "modus_ponens", "modus_tollens", "abduction", "induction",
   "analogy", "testimony", "causal", "statistical",
 ];
+const NODE_ROLES = ["claim", "thesis", "objection", "concession"];
+const SUPPORT_MODES = ["conjunctive", "disjunctive", "independent"];
+const RELATIONS = ["supports", "refutes", "rebuts", "concedes", "grounds", "narrows", "supersedes"];
+const ROLE_SYMBOLS = { claim: "●", thesis: "◉", objection: "◆", concession: "◇", evidence: "■" };
+const ROLE_COLORS = { claim: "#60a5fa", thesis: "#FF6B35", objection: "#f87171", concession: "#fb923c", evidence: "#4ade80" };
+
+function NodeSelect({ value, onChange, nodes, placeholder }) {
+  return (
+    <select
+      value={value} onChange={onChange}
+      style={{
+        width: "100%", background: "#141414", border: "1px solid #222",
+        borderRadius: "3px", color: "#e0e0e0", padding: "8px 10px",
+        fontSize: "11px", fontFamily: "'JetBrains Mono', monospace",
+        outline: "none", marginTop: "4px", boxSizing: "border-box",
+      }}
+    >
+      <option value="">{placeholder}</option>
+      {nodes.map((n) => (
+        <option key={n.id} value={n.id}>
+          {ROLE_SYMBOLS[n.node_type || n.type] || "●"} {n.label.length > 44 ? n.label.slice(0, 42) + "…" : n.label}
+        </option>
+      ))}
+    </select>
+  );
+}
 
 function Label({ children }) {
   return <label style={{ fontSize: "9px", color: "#555", letterSpacing: "1px", textTransform: "uppercase" }}>{children}</label>;
@@ -62,7 +88,25 @@ function SubmitButton({ onClick, disabled, children }) {
 }
 
 export default function AddPanel({ workspace, graphNodes, onAdded }) {
-  const [mode, setMode] = useState("claim");
+  const [mode, setMode] = useState("text");
+
+  // Quick text claim (F1)
+  const [qText, setQText] = useState("");
+  const [qRole, setQRole] = useState("claim");
+  const [qConf, setQConf] = useState(0.7);
+  const [qModality, setQModality] = useState("empirical");
+
+  // Typed link (F1)
+  const [linkFrom, setLinkFrom] = useState("");
+  const [linkTo, setLinkTo] = useState("");
+  const [linkRel, setLinkRel] = useState("supports");
+
+  // Import / export (F1)
+  const [importText, setImportText] = useState("");
+  const [importMode, setImportMode] = useState("merge");
+  const [ioMsg, setIoMsg] = useState(null);
+
+  const [argSupportMode, setArgSupportMode] = useState("conjunctive");
 
   // Claim form
   const [subject, setSubject] = useState("");
@@ -102,9 +146,55 @@ export default function AddPanel({ workspace, graphNodes, onAdded }) {
 
   const addArgument = async () => {
     if (!workspace || !argConclusion || argPremises.length === 0) return;
-    await api.createArgument(workspace, { conclusion: argConclusion, premises: argPremises, pattern: argPattern, label: argLabel, confidence: argConfidence });
+    try {
+      await api.addAuthoredArgument(workspace, {
+        conclusion_id: argConclusion, premise_ids: argPremises, pattern: argPattern,
+        label: argLabel, confidence: argConfidence, support_mode: argSupportMode,
+      });
+    } catch (err) { alert(err.message); return; }
     setArgLabel(""); setArgPremises([]); setArgConfidence(0.7);
     onAdded();
+  };
+
+  const addQuick = async () => {
+    if (!workspace || !qText.trim()) return;
+    try {
+      await api.addClaimText(workspace, { text: qText.trim(), node_type: qRole, confidence: qConf, modality: qModality });
+    } catch (err) { alert(err.message); return; }
+    setQText(""); setQConf(0.7);
+    onAdded();
+  };
+
+  const addLink = async () => {
+    if (!workspace || !linkFrom || !linkTo || linkFrom === linkTo) return;
+    try {
+      await api.link(workspace, { from_id: linkFrom, to_id: linkTo, relation: linkRel });
+    } catch (err) { alert(err.message); return; }
+    setLinkFrom(""); setLinkTo("");
+    onAdded();
+  };
+
+  const doExport = async () => {
+    setIoMsg(null);
+    try {
+      const g = await api.exportGraph(workspace);
+      const text = JSON.stringify(g, null, 2);
+      await navigator.clipboard.writeText(text);
+      setIoMsg(`Copied ${g.claims.length} claims, ${g.evidence.length} evidence, ${g.arguments.length} arguments, ${g.edges.length} edges to clipboard.`);
+    } catch (err) { setIoMsg(err.message); }
+  };
+
+  const doImport = async () => {
+    setIoMsg(null);
+    let g;
+    try { g = JSON.parse(importText); } catch { setIoMsg("Not valid JSON."); return; }
+    if (importMode === "replace" && !confirm("Replace the whole workspace with this graph? The prior state stays in git history.")) return;
+    try {
+      const r = await api.importGraph(workspace, g, importMode);
+      setIoMsg(`Imported (${r.mode}): ${Object.entries(r).filter(([k]) => !["ok", "mode"].includes(k)).map(([k, v]) => `${k} ${v}`).join(", ")}`);
+      setImportText("");
+      onAdded();
+    } catch (err) { setIoMsg(err.message); }
   };
 
   if (!workspace) {
@@ -121,7 +211,7 @@ export default function AddPanel({ workspace, graphNodes, onAdded }) {
     <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
       {/* Mode selector */}
       <div style={{ display: "flex", gap: "4px" }}>
-        {["claim", "evidence", "argument"].map((m) => (
+        {["text", "claim", "evidence", "argument", "link", "import"].map((m) => (
           <button
             key={m}
             onClick={() => setMode(m)}
@@ -138,6 +228,70 @@ export default function AddPanel({ workspace, graphNodes, onAdded }) {
           </button>
         ))}
       </div>
+
+      {/* Quick text node (F1) */}
+      {mode === "text" && (
+        <>
+          <div style={{ fontSize: "9px", color: "#555", lineHeight: 1.5 }}>
+            Write the statement in plain language and pick its dialectical role. Objections and concessions are first-class nodes; link them with a typed edge afterwards.
+          </div>
+          <div><Label>Statement</Label>
+            <textarea value={qText} onChange={(e) => setQText(e.target.value)} placeholder="e.g. Reputation systems cannot assign responsibility across contexts" rows={3}
+              style={{ width: "100%", background: "#141414", border: "1px solid #222", borderRadius: "3px", color: "#e0e0e0", padding: "8px 10px", fontSize: "12px", fontFamily: "'JetBrains Mono', monospace", outline: "none", marginTop: "4px", boxSizing: "border-box", resize: "vertical" }} />
+          </div>
+          <div><Label>Role</Label>
+            <div style={{ display: "flex", gap: "4px", marginTop: "4px" }}>
+              {NODE_ROLES.map((r) => (
+                <button key={r} onClick={() => setQRole(r)} style={{
+                  flex: 1, background: qRole === r ? `${ROLE_COLORS[r]}22` : "#141414",
+                  border: `1px solid ${qRole === r ? ROLE_COLORS[r] : "#222"}`,
+                  color: qRole === r ? ROLE_COLORS[r] : "#666", padding: "6px 0", borderRadius: "3px",
+                  fontSize: "10px", cursor: "pointer", fontFamily: "'JetBrains Mono', monospace",
+                }}>{ROLE_SYMBOLS[r]} {r}</button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <Label>Confidence</Label>
+              <span style={{ fontSize: "12px", color: "#FF6B35" }}>{(qConf * 100).toFixed(0)}%</span>
+            </div>
+            <input type="range" min="5" max="99" value={qConf * 100} onChange={(e) => setQConf(parseInt(e.target.value) / 100)} style={{ width: "100%", marginTop: "4px", accentColor: "#FF6B35" }} />
+          </div>
+          <div><Label>Modality</Label><Select value={qModality} onChange={(e) => setQModality(e.target.value)} options={MODALITIES} /></div>
+          <SubmitButton onClick={addQuick} disabled={!qText.trim()}>ADD {qRole.toUpperCase()}</SubmitButton>
+        </>
+      )}
+
+      {/* Typed link (F1) */}
+      {mode === "link" && (
+        <>
+          <div style={{ fontSize: "9px", color: "#555", lineHeight: 1.5 }}>
+            Edges are the lossless source of truth. supports / grounds create an argument; refutes / rebuts / concedes attach a defeater; supersedes marks the target as history.
+          </div>
+          <div><Label>From</Label><NodeSelect value={linkFrom} onChange={(e) => setLinkFrom(e.target.value)} nodes={graphNodes} placeholder="Select source…" /></div>
+          <div><Label>Relation</Label><Select value={linkRel} onChange={(e) => setLinkRel(e.target.value)} options={RELATIONS} /></div>
+          <div><Label>To</Label><NodeSelect value={linkTo} onChange={(e) => setLinkTo(e.target.value)} nodes={graphNodes} placeholder="Select target…" /></div>
+          <SubmitButton onClick={addLink} disabled={!linkFrom || !linkTo || linkFrom === linkTo}>LINK</SubmitButton>
+        </>
+      )}
+
+      {/* Import / export (F1) */}
+      {mode === "import" && (
+        <>
+          <button onClick={doExport} style={{
+            background: "#141414", border: "1px solid #333", color: "#888", borderRadius: "3px",
+            padding: "8px", fontSize: "10px", cursor: "pointer", fontFamily: "'JetBrains Mono', monospace", letterSpacing: "1px",
+          }}>EXPORT WORKSPACE → CLIPBOARD (epist-graph/v1)</button>
+          <div><Label>Import JSON (epist-graph/v1 export or a {"{nodes, edges}"} document)</Label>
+            <textarea value={importText} onChange={(e) => setImportText(e.target.value)} placeholder='{"nodes": [...], "edges": [...]}' rows={8}
+              style={{ width: "100%", background: "#141414", border: "1px solid #222", borderRadius: "3px", color: "#e0e0e0", padding: "8px 10px", fontSize: "10px", fontFamily: "'JetBrains Mono', monospace", outline: "none", marginTop: "4px", boxSizing: "border-box", resize: "vertical" }} />
+          </div>
+          <div><Label>Mode</Label><Select value={importMode} onChange={(e) => setImportMode(e.target.value)} options={["merge", "replace"]} /></div>
+          {ioMsg && <div style={{ fontSize: "10px", color: "#4ade80", lineHeight: 1.5 }}>{ioMsg}</div>}
+          <SubmitButton onClick={doImport} disabled={!importText.trim()}>IMPORT</SubmitButton>
+        </>
+      )}
 
       {/* Claim form */}
       {mode === "claim" && (
@@ -210,8 +364,8 @@ export default function AddPanel({ workspace, graphNodes, onAdded }) {
                     color: argPremises.includes(n.id) ? "#FF6B35" : "#888",
                   }}
                 >
-                  <span style={{ color: n.type === "evidence" ? "#4ade80" : "#60a5fa", marginRight: "6px" }}>
-                    {n.type === "evidence" ? "■" : "●"}
+                  <span style={{ color: ROLE_COLORS[n.node_type || n.type] || "#60a5fa", marginRight: "6px" }}>
+                    {ROLE_SYMBOLS[n.node_type || n.type] || "●"}
                   </span>
                   {n.label.length > 35 ? n.label.slice(0, 33) + "…" : n.label}
                 </div>
@@ -219,6 +373,7 @@ export default function AddPanel({ workspace, graphNodes, onAdded }) {
             </div>
           </div>
           <div><Label>Pattern</Label><Select value={argPattern} onChange={(e) => setArgPattern(e.target.value)} options={PATTERNS} /></div>
+          <div><Label>Support mode (how premises combine)</Label><Select value={argSupportMode} onChange={(e) => setArgSupportMode(e.target.value)} options={SUPPORT_MODES} /></div>
           <div><Label>Label</Label><Input value={argLabel} onChange={(e) => setArgLabel(e.target.value)} placeholder="Short description of this argument" /></div>
           <div>
             <div style={{ display: "flex", justifyContent: "space-between" }}>

@@ -4,6 +4,7 @@ import AddPanel from "./components/AddPanel.jsx";
 import InspectPanel from "./components/InspectPanel.jsx";
 import AnalysisPanel from "./components/AnalysisPanel.jsx";
 import SummaryPanel from "./components/SummaryPanel.jsx";
+import SourcesPanel from "./components/SourcesPanel.jsx";
 import WorkspaceSidebar from "./components/WorkspaceSidebar.jsx";
 import NewWorkspaceModal from "./components/NewWorkspaceModal.jsx";
 import CompareModal from "./components/CompareModal.jsx";
@@ -14,8 +15,10 @@ const STORAGE_KEY = "epist.workspace";
 export default function App() {
   // Workspace state
   const [workspaces, setWorkspaces] = useState([]);
+  // ?ws=<name>&tab=<summary|graph|inspect|add|sources|analysis> deep-links a view.
+  const params = new URLSearchParams(window.location.search);
   const [currentWorkspace, setCurrentWorkspace] = useState(
-    () => localStorage.getItem(STORAGE_KEY) || null
+    () => params.get("ws") || localStorage.getItem(STORAGE_KEY) || null
   );
   const [workspaceInfo, setWorkspaceInfo] = useState(null);
   const [branches, setBranches] = useState([]);
@@ -25,7 +28,7 @@ export default function App() {
   const [fullGraph, setFullGraph] = useState({ nodes: [], edges: [] });
   const [selectedId, setSelectedId] = useState(null);
   const [highlightIds, setHighlightIds] = useState([]);
-  const [panel, setPanel] = useState("summary");
+  const [panel, setPanel] = useState(params.get("tab") || "summary");
   const [analysisKey, setAnalysisKey] = useState(0);
 
   // Thesis selection (for workspaces with multiple thesis lineages)
@@ -155,13 +158,18 @@ export default function App() {
   const graph = (() => {
     if (!activeThesisId) return fullGraph;
 
+    // Walk from the thesis toward whatever bears on it: premises, assumptions,
+    // objections/concessions (edges pointing AT a reachable node), and the
+    // history a node supersedes (so rejected positions stay visible).
     const conclusionToPremises = {};
     fullGraph.edges.forEach((e) => {
-      if (e.type === "supports" || e.type === "assumes") {
-        const src = e.source?.id || e.source;
-        const tgt = e.target?.id || e.target;
-        if (!conclusionToPremises[tgt]) conclusionToPremises[tgt] = [];
-        conclusionToPremises[tgt].push(src);
+      const src = e.source?.id || e.source;
+      const tgt = e.target?.id || e.target;
+      if (!conclusionToPremises[tgt]) conclusionToPremises[tgt] = [];
+      conclusionToPremises[tgt].push(src);
+      if (e.type === "supersedes") {
+        if (!conclusionToPremises[src]) conclusionToPremises[src] = [];
+        conclusionToPremises[src].push(tgt);
       }
     });
 
@@ -315,6 +323,7 @@ export default function App() {
               { key: "graph", label: "Graph" },
               { key: "inspect", label: selectedNode ? `Inspect: ${selectedNode.label.slice(0, 30)}${selectedNode.label.length > 30 ? "…" : ""}` : "Inspect" },
               { key: "add", label: "Add" },
+              { key: "sources", label: "Sources" },
               { key: "analysis", label: "Analysis" },
             ].map((tab) => (
               <button
@@ -411,8 +420,29 @@ export default function App() {
                       <span style={{ fontSize: "9px", color: "#555" }}>Claim</span>
                     </div>
                     <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                      <span style={{ color: "#FF6B35", fontSize: "12px" }}>◉</span>
+                      <span style={{ fontSize: "9px", color: "#555" }}>Thesis</span>
+                    </div>
+                    <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                      <span style={{ color: "#f87171", fontSize: "12px" }}>◆</span>
+                      <span style={{ fontSize: "9px", color: "#555" }}>Objection</span>
+                    </div>
+                    <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                      <span style={{ color: "#fb923c", fontSize: "12px" }}>◇</span>
+                      <span style={{ fontSize: "9px", color: "#555" }}>Concession</span>
+                    </div>
+                    <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
                       <span style={{ color: "#4ade80", fontSize: "12px" }}>■</span>
                       <span style={{ fontSize: "9px", color: "#555" }}>Evidence</span>
+                      <span style={{ fontSize: "9px", color: "#fbbf24" }}>(dashed = asserted)</span>
+                    </div>
+                    <div style={{ fontSize: "9px", color: "#333" }}>|</div>
+                    <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                      <span style={{ fontSize: "9px", color: "#4ade80" }}>supports</span>
+                      <span style={{ fontSize: "9px", color: "#f87171" }}>rebuts</span>
+                      <span style={{ fontSize: "9px", color: "#fb923c" }}>concedes</span>
+                      <span style={{ fontSize: "9px", color: "#a78bfa" }}>supersedes</span>
+                      <span style={{ fontSize: "9px", color: "#FF6B35" }}>→n% derived</span>
                     </div>
                     <div style={{ fontSize: "9px", color: "#333" }}>|</div>
                     <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
@@ -458,6 +488,19 @@ export default function App() {
                   workspace={currentWorkspace}
                   graphNodes={graph.nodes}
                   onAdded={handleUpdated}
+                />
+              </div>
+
+              {/* Sources — provenance + ingestion */}
+              <div style={{
+                flex: 1, overflow: "auto",
+                padding: "20px 28px",
+                display: panel === "sources" ? "block" : "none",
+              }}>
+                <SourcesPanel
+                  workspace={currentWorkspace}
+                  onSelectNode={handleSelectNode}
+                  onUpdated={handleUpdated}
                 />
               </div>
 

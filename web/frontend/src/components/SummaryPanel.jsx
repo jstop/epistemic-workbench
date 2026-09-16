@@ -532,7 +532,57 @@ export default function SummaryPanel({ workspace, onThesisChange, activeThesisId
           <span style={{ color: assessment.active_defeaters > 0 ? "#f87171" : "#4ade80", textAlign: "right" }}>{assessment.active_defeaters}</span>
           <span style={{ color: "#888" }}>Overall status</span>
           <span style={{ color: atmsColor, textAlign: "right", textTransform: "uppercase" }}>{assessment.atms_status}</span>
+          {assessment.derived_confidence != null && (
+            <>
+              <span style={{ color: "#888" }}>Derived confidence (propagated)</span>
+              <span style={{ color: Math.abs(assessment.derived_confidence - assessment.thesis_confidence) >= 0.05 ? "#fbbf24" : "#FF6B35", textAlign: "right" }}>
+                {(assessment.derived_confidence * 100).toFixed(0)}%
+              </span>
+            </>
+          )}
+          {assessment.evidence_recorded != null && (
+            <>
+              <span style={{ color: "#888" }}>Evidence recorded / asserted</span>
+              <span style={{ textAlign: "right" }}>
+                <span style={{ color: "#4ade80" }}>{assessment.evidence_recorded}</span>
+                <span style={{ color: "#555" }}> / </span>
+                <span style={{ color: assessment.evidence_asserted > 0 ? "#fbbf24" : "#888" }}>{assessment.evidence_asserted}</span>
+              </span>
+            </>
+          )}
         </div>
+
+        {assessment.confidence_gap && (
+          <div style={{ marginTop: "10px", padding: "8px", background: "#0A0A0A", borderRadius: "3px", borderLeft: "3px solid #fbbf24", fontSize: "10px" }}>
+            <div style={{ color: "#fbbf24", fontSize: "9px", letterSpacing: "1px", textTransform: "uppercase", marginBottom: "4px" }}>Confidence gap</div>
+            <div style={{ color: "#999", lineHeight: 1.5 }}>
+              Stored {(assessment.confidence_gap.stored * 100).toFixed(0)}% vs derived {(assessment.confidence_gap.derived * 100).toFixed(0)}%.
+              {assessment.confidence_gap.binding_objections?.length > 0 && " Binding objections:"}
+            </div>
+            {(assessment.confidence_gap.binding_objections || []).map((o) => (
+              <div key={o.id} onClick={() => onSelectNode && onSelectNode(o.id)} style={{ color: "#f87171", cursor: "pointer", marginTop: "3px" }}>
+                ◆ {o.label} <span style={{ color: "#555" }}>({o.rel}, {(o.strength * 100).toFixed(0)}%)</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {assessment.conjunction && (
+          <div style={{ marginTop: "10px", padding: "8px", background: "#0A0A0A", borderRadius: "3px", borderLeft: "3px solid #a78bfa", fontSize: "10px" }}>
+            <div style={{ color: "#a78bfa", fontSize: "9px", letterSpacing: "1px", textTransform: "uppercase", marginBottom: "4px" }}>
+              Conjunction · {assessment.conjunction.n_premises} premises ({assessment.conjunction.support_mode})
+            </div>
+            <div style={{ color: "#999", lineHeight: 1.5 }}>
+              Average {(assessment.conjunction.average * 100).toFixed(0)}% · product {(assessment.conjunction.product * 100).toFixed(0)}% · derived {(assessment.conjunction.derived * 100).toFixed(0)}%.
+              {(assessment.conjunction.weakest_links || []).length > 0 && " Weakest links:"}
+            </div>
+            {(assessment.conjunction.weakest_links || []).map((w) => (
+              <div key={w.id} onClick={() => onSelectNode && onSelectNode(w.id)} style={{ color: "#ccc", cursor: "pointer", marginTop: "3px" }}>
+                ● {w.label} <span style={{ color: "#555" }}>({(w.confidence * 100).toFixed(0)}%)</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

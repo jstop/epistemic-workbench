@@ -1,16 +1,29 @@
 import { useState, useRef, useEffect } from "react";
 import * as d3 from "d3";
 
-const EDGE_TYPES = {
+export const EDGE_TYPES = {
   supports: { label: "supports", color: "#4ade80", dash: "none" },
+  grounds: { label: "grounds", color: "#4ade80", dash: "2,3" },
   attacks: { label: "attacks", color: "#f87171", dash: "8,4" },
+  refutes: { label: "refutes", color: "#f87171", dash: "8,4" },
+  rebuts: { label: "rebuts", color: "#f87171", dash: "8,4" },
+  concedes: { label: "concedes", color: "#fb923c", dash: "6,3" },
+  narrows: { label: "narrows", color: "#a78bfa", dash: "3,3" },
+  supersedes: { label: "supersedes", color: "#a78bfa", dash: "10,4" },
   assumes: { label: "assumes", color: "#fbbf24", dash: "4,4" },
 };
 
-const NODE_TYPES = {
+// node.type is the storage kind (claim | evidence); node.node_type is the
+// dialectical role (claim | thesis | objection | concession | evidence).
+export const NODE_TYPES = {
   claim: { label: "Claim", color: "#60a5fa", symbol: "●" },
+  thesis: { label: "Thesis", color: "#FF6B35", symbol: "◉" },
+  objection: { label: "Objection", color: "#f87171", symbol: "◆" },
+  concession: { label: "Concession", color: "#fb923c", symbol: "◇" },
   evidence: { label: "Evidence", color: "#4ade80", symbol: "■" },
 };
+
+const REJECTED = new Set(["superseded", "defeated", "rebutted", "conceded"]);
 
 const ATMS_BORDER = {
   accepted: "#4ade80",
@@ -133,18 +146,21 @@ export default function Graph({ nodes, edges, selectedId, highlightIds, onSelect
 
       {/* Nodes */}
       {nodes.map((node) => {
-        const cfg = NODE_TYPES[node.type] || NODE_TYPES.claim;
+        const role = node.node_type || (node.is_root ? "thesis" : node.type);
+        const cfg = NODE_TYPES[role] || NODE_TYPES[node.type] || NODE_TYPES.claim;
         const isSelected = node.id === selectedId;
         const isHighlighted = highlightSet.has(node.id);
         const atmsColor = ATMS_BORDER[node.atms] || ATMS_BORDER.unknown;
         const radius = 20;
-        const dimmed = highlightSet.size > 0 && !isHighlighted && !isSelected;
+        const rejected = REJECTED.has(node.status);
+        const asserted = node.type === "evidence" && node.provenance !== "recorded";
+        const dimmed = (highlightSet.size > 0 && !isHighlighted && !isSelected) || (rejected && !isSelected);
 
         return (
           <g
             key={node.id}
             style={{ cursor: "grab" }}
-            opacity={dimmed ? 0.25 : 1}
+            opacity={dimmed ? (rejected ? 0.4 : 0.25) : 1}
             onMouseDown={(ev) => handleDragStart(ev, node)}
             onClick={(ev) => { ev.stopPropagation(); onSelectNode(node.id); }}
           >
@@ -158,12 +174,13 @@ export default function Graph({ nodes, edges, selectedId, highlightIds, onSelect
               transform={`rotate(-90 ${node.x} ${node.y})`}
               opacity={0.7}
             />
-            {/* Node body */}
+            {/* Node body — asserted (unsourced) evidence gets a dashed outline */}
             <circle
               cx={node.x} cy={node.y} r={radius}
               fill={isSelected ? cfg.color : "#1a1a1a"}
               stroke={isSelected ? "#fff" : cfg.color}
               strokeWidth={isSelected ? 2.5 : 1.5}
+              strokeDasharray={asserted ? "3,3" : "none"}
             />
             {/* Defeated X overlay */}
             {node.atms === "defeated" && (
@@ -190,14 +207,24 @@ export default function Graph({ nodes, edges, selectedId, highlightIds, onSelect
             >
               {node.label.length > 28 ? node.label.slice(0, 26) + "…" : node.label}
             </text>
-            {/* ATMS badge */}
+            {/* ATMS badge (+ stored status when it has been overridden) */}
             <text
               x={node.x} y={node.y - radius - 8}
-              fill={atmsColor} fontSize="8" fontFamily="'JetBrains Mono', monospace"
-              textAnchor="middle" opacity={0.6} style={{ pointerEvents: "none" }}
+              fill={rejected ? "#a78bfa" : atmsColor} fontSize="8" fontFamily="'JetBrains Mono', monospace"
+              textAnchor="middle" opacity={0.7} style={{ pointerEvents: "none" }}
             >
-              {node.atms}
+              {rejected ? node.status : node.atms}
             </text>
+            {/* Derived confidence, when propagation moved it from the stored value */}
+            {node.derived != null && Math.abs(node.derived - node.confidence) >= 0.05 && (
+              <text
+                x={node.x + radius + 6} y={node.y - radius + 2}
+                fill="#FF6B35" fontSize="8" fontFamily="'JetBrains Mono', monospace"
+                textAnchor="start" opacity={0.8} style={{ pointerEvents: "none" }}
+              >
+                {`→${Math.round(node.derived * 100)}%`}
+              </text>
+            )}
             {/* Per-defeater chips below the label */}
             {(node.defeaters || []).slice(0, 5).map((d, i) => {
               const color = DEFEATER_CHIP_COLORS[d.status] || "#666";
