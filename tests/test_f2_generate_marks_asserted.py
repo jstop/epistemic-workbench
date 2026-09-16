@@ -61,9 +61,6 @@ def test_generate_full_graph_stamps_asserted(monkeypatch, tmp_path):
         messages = _FakeMessages()
 
     monkeypatch.setattr(llm, "get_client", lambda: _FakeClient())
-    # avoid touching real recall during the unit test
-    from epist import recall_client
-    monkeypatch.setattr(recall_client, "record_derivation", lambda **k: None)
 
     s = Store(tmp_path / "ws")
     s.init_workspace()  # real callers create the workspace dir before generating

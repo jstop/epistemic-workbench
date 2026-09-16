@@ -422,7 +422,7 @@ function ProvenanceSection({ workspace, node, onUpdated }) {
     try {
       const r = await api.attachSource(workspace, {
         node_id: node.id,
-        source_id: sourceId ? parseInt(sourceId, 10) : null,
+        evidence_id: sourceId || null,
         url, quote,
       });
       if (r.ok) { setOpen(false); setUrl(""); setQuote(""); setSourceId(""); onUpdated(); }
@@ -444,7 +444,7 @@ function ProvenanceSection({ workspace, node, onUpdated }) {
         </div>
         {recorded ? (
           <div style={{ color: "#999", lineHeight: 1.5, wordBreak: "break-all" }}>
-            {detail.source_id != null && <div>recall source #{detail.source_id}</div>}
+            {detail.evidence_id && <div>library evidence {detail.evidence_id}</div>}{detail.source_id != null && <div>legacy recall source #{detail.source_id}</div>}
             {detail.url && <div>{detail.url}</div>}
             {detail.quote && <div style={{ color: "#777", fontStyle: "italic" }}>“{detail.quote}”</div>}
           </div>
@@ -463,7 +463,7 @@ function ProvenanceSection({ workspace, node, onUpdated }) {
         <div style={{ background: "#141414", borderRadius: "4px", padding: "8px", marginTop: "6px", display: "flex", flexDirection: "column", gap: "6px" }}>
           <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Source URL" style={inputStyle()} />
           <input value={quote} onChange={(e) => setQuote(e.target.value)} placeholder="Supporting quote (optional)" style={inputStyle()} />
-          <input value={sourceId} onChange={(e) => setSourceId(e.target.value)} placeholder="…or an existing recall source id" style={inputStyle()} />
+          <input value={sourceId} onChange={(e) => setSourceId(e.target.value)} placeholder="…or an existing library evidence id (evd_…)" style={inputStyle()} />
           {msg && <div style={{ fontSize: "9px", color: "#f87171" }}>{msg}</div>}
           <div style={{ display: "flex", gap: "4px" }}>
             <button onClick={submit} disabled={!url && !sourceId} style={btn({ flex: 1, background: "#4ade8022", borderColor: "#4ade80", color: "#4ade80" })}>Record</button>

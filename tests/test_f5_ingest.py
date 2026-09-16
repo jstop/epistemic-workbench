@@ -2,7 +2,7 @@
 import pytest
 
 from epist.store import Store
-from epist import ingest, provenance, recall_client
+from epist import ingest, provenance, library_client
 
 
 DOC = (
@@ -28,11 +28,16 @@ def _stub_extractor(text):
 
 
 @pytest.fixture(autouse=True)
-def _no_recall(monkeypatch):
-    """Default these tests to recall-absent so they're hermetic; the explicit
-    recall test re-enables it."""
-    monkeypatch.setattr(recall_client, "record_source", lambda **k: None)
-    monkeypatch.setattr(recall_client, "record_derivation", lambda **k: None)
+def _no_library_by_default(request, tmp_path, monkeypatch):
+    """Default these tests to library-absent so they're hermetic; the explicit
+    library test opts in with the temp_library fixture."""
+    if "temp_library" in request.fixturenames:
+        yield
+        return
+    monkeypatch.setenv("EPIST_MEMORY_PATH", str(tmp_path / "nowhere"))
+    library_client.reset()
+    yield
+    library_client.reset()
 
 
 def test_ingest_proposes_without_committing(tmp_path):
@@ -102,28 +107,22 @@ def test_llm_extractor_drops_ungrounded_spans(monkeypatch):
     assert out["edges"] == []     # edge referencing dropped node removed
 
 
-# ── real recall provenance on commit ─────────────────────────────────
+# ── real library provenance on commit ────────────────────────────────
 
-def test_committed_nodes_get_recall_provenance(tmp_path, monkeypatch):
-    import tempfile, os
-    with tempfile.TemporaryDirectory() as d:
-        monkeypatch.setenv("RECALL_DB", os.path.join(d, "recall.db"))
-        recall_client.reset_cache()
-        # undo the autouse stubs so real recall is exercised
-        import importlib
-        importlib.reload(recall_client)
-        if recall_client._db() is None:
-            pytest.skip("recall not importable")
+def test_committed_nodes_get_library_provenance(tmp_path, temp_library):
+    eng = temp_library
+    s = Store(tmp_path / "ws")
+    s.init_workspace()
+    res = ingest.ingest_document(s, source_text=DOC, extractor=_stub_extractor, title="t")
+    assert res["source_id"] is not None
+    # the source itself is a content-addressed snapshot in the substrate
+    e = eng.get_log().state()["evidence"][res["source_id"]]
+    assert e["durability"] == "SNAPSHOTTED" and e["metadata"]["kind"] == "ingested-source"
+    assert eng.get_log().evidence_content(res["source_id"]).decode() == DOC
 
-        s = Store(tmp_path / "ws")
-        s.init_workspace()
-        res = ingest.ingest_document(s, source_text=DOC, extractor=_stub_extractor,
-                                     title="t")
-        assert res["source_id"] is not None
-        ingest.commit_proposal(s, res["proposal_id"], ["n0", "n1"])
-
-        from recall import db
-        traced = db.trace_derivation(
-            claim_text="PoW achieves Sybil resistance by substituting cost for identity.")
-        assert any(r["source_record_id"] == res["source_id"] for r in traced)
-        recall_client.reset_cache()
+    ingest.commit_proposal(s, res["proposal_id"], ["n0", "n1"])
+    claim = next(c for c in s.claims.values() if c.notes.startswith("PoW achieves"))
+    ing = claim.version_meta["ingested_from"]
+    assert ing["evidence_id"] == res["source_id"]
+    assert ing["span"].startswith("Proof of work achieves")
+    assert ing["claim_hash"] == library_client.claim_hash(claim.notes)

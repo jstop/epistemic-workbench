@@ -27,7 +27,7 @@ import uuid
 from pathlib import Path
 
 from .model import Claim, Evidence, Argument, Edge, Confidence
-from . import recall_client
+from . import library_client
 
 
 PROPOSAL_DIR = "proposals"
@@ -112,9 +112,13 @@ def ingest_document(store, source_text=None, source_ref=None, extractor=None,
         raise ValueError("provide source_text or a source_ref with content/url")
 
     url = source_ref.get("url") if isinstance(source_ref, dict) else None
-    source_id = recall_client.record_source(
-        content=text, source_type=source_type, url=url,
-        summary=(title or text[:200]),
+    # The source is registered in the substrate (content-addressed snapshot);
+    # `source_id` is the library evidence id, or None if the library is down —
+    # in which case nothing derived from it can be marked recorded.
+    source_id = library_client.register_evidence(
+        content=text, uri=url, media_type="text/plain",
+        metadata={"kind": "ingested-source", "source_type": source_type,
+                  "title": (title or text[:200])},
     )
 
     proposed = extractor(text) or {}
@@ -200,32 +204,23 @@ def commit_proposal(store, proposal_id, accepted_node_ids) -> dict:
             store.claims[c.id] = c
             id_map[nid] = c.id
             counts["claims"] += 1
-            # record provenance: the claim derives from this source span
-            recall_client.record_derivation(
-                claim_text=text or c.id,
-                source_record_id=source_id if source_id is not None else None,
-                edge_type=("paraphrase" if source_id is not None else "pattern_match"),
-                context=f"ingest:{proposal_id}",
-                notes=(f"span={span}" if span else None),
-            )
+            # Provenance for an accepted claim is the proposal itself (kept on
+            # disk with its spans) plus the library evidence it came from. A
+            # per-claim interpretation event with run identity is phase 3.
+            c.version_meta = dict(c.version_meta or {}, ingested_from={
+                "evidence_id": source_id, "proposal_id": proposal_id,
+                "span": span, "claim_hash": library_client.claim_hash(text or "")})
         elif ntype == "evidence":
             recorded = source_id is not None
             ev = Evidence(title=(text[:80] or nid), description=text,
-                          source=proposal.get("source_url") or f"recall:{source_id}",
+                          source=proposal.get("source_url") or (f"library:{source_id}" if source_id else "(ingested; library unavailable)"),
                           reliability=n.get("confidence", 0.6))
-            ev.provenance = ({"kind": "recorded", "source_id": source_id,
+            ev.provenance = ({"kind": "recorded", "evidence_id": source_id,
                               "url": proposal.get("source_url"), "quote": quote}
                              if recorded else {"kind": "asserted"})
             store.evidence[ev.id] = ev
             id_map[nid] = ev.id
             counts["evidence"] += 1
-            if recorded:
-                recall_client.record_derivation(
-                    claim_text=(ev.title + " — " + ev.description),
-                    source_record_id=source_id, edge_type="direct_quote",
-                    context=f"ingest:{proposal_id}",
-                    notes=(f"span={span}" if span else None),
-                )
         else:
             skipped += 1
 

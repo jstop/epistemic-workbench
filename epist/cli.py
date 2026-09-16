@@ -462,6 +462,67 @@ def export_cmd(ctx, fmt, output):
     console.print(f"[green]✓[/green] Exported {len(s.all_objects())} objects to {output}")
 
 
+# ── Substrate bridge: verify-thesis (anchor) and snapshot ────────────
+
+@cli.command("verify-thesis")
+@click.argument("workspace", required=False)
+@click.option("--min-derived", type=float, default=None,
+              help="Fail (exit 3) if the thesis's derived confidence is below this.")
+@click.pass_context
+def verify_thesis(ctx, workspace, min_derived):
+    """Re-run the argument. Exit 0 if the thesis stands, 2 if it is ATMS-defeated,
+    3 if its derived confidence is below --min-derived, 4 if there is no thesis.
+
+    This is what a living-library belief's anchor calls: the argument IS the
+    re-check. Output is one JSON line so the verification record is legible."""
+    from epist.engine import compute_atms, propagate_confidence
+    home = ctx.obj["home"]
+    if workspace:
+        wp = Path(workspace)
+        home = wp if wp.is_absolute() else Path(
+            os.environ.get("EPIST_WORKSPACES", Path.home() / "workspace" / "epistemic" / "workspaces")) / workspace
+    s = Store(Path(home))
+    thesis = _find_root_thesis(s)
+    if thesis is None:
+        click.echo(json.dumps({"ok": False, "reason": "no thesis"}))
+        sys.exit(4)
+    atms = compute_atms(s)
+    derived = propagate_confidence(s, atms).get(thesis.id)
+    status = atms.get(thesis.id)
+    status = status.value if hasattr(status, "value") else str(status)
+    commit = s.git_log(max_count=1)[0]["hash"][:12] if s.is_git_repo() and s.git_log(max_count=1) else None
+    out = {"ok": True, "workspace": Path(home).name, "commit": commit,
+           "thesis": (thesis.notes or f"{thesis.subject} {thesis.predicate} {thesis.object}").strip()[:120],
+           "atms": status, "stored": thesis.confidence.level, "derived": derived,
+           "active_defeaters": sum(1 for a in s.arguments.values() if a.conclusion == thesis.id
+                                   for d in a.defeaters if d.status.value in ("active", "conceded"))}
+    if status == "defeated":
+        out["ok"] = False; out["reason"] = "thesis is defeated"
+        click.echo(json.dumps(out)); sys.exit(2)
+    if min_derived is not None and (derived is None or derived < min_derived):
+        out["ok"] = False; out["reason"] = f"derived confidence {derived} below {min_derived}"
+        click.echo(json.dumps(out)); sys.exit(3)
+    click.echo(json.dumps(out))
+
+
+@cli.command("snapshot")
+@click.argument("workspace", required=False)
+@click.pass_context
+def snapshot(ctx, workspace):
+    """Register this workspace at its current commit as evidence in the living library."""
+    from epist import library_client
+    home = ctx.obj["home"]
+    if workspace:
+        wp = Path(workspace)
+        home = wp if wp.is_absolute() else Path(
+            os.environ.get("EPIST_WORKSPACES", Path.home() / "workspace" / "epistemic" / "workspaces")) / workspace
+    s = Store(Path(home))
+    r = library_client.snapshot_workspace(s, Path(home).name)
+    click.echo(json.dumps(r))
+    if not r["ok"]:
+        sys.exit(1)
+
+
 # ── Manual intervention commands ──────────────────────────────────────
 
 def _git_commit_manual(s, message):

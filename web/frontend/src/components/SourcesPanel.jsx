@@ -126,7 +126,7 @@ function IngestSection({ workspace, onProposalCreated }) {
     <div style={box}>
       <div style={{ ...label, marginBottom: "8px" }}>Ingest a document</div>
       <div style={{ fontSize: "9px", color: "#777", marginBottom: "8px", lineHeight: 1.5 }}>
-        The source is registered in recall and an LLM proposes the claims, arguments and objections it contains, each tied to a verbatim span. Nothing enters the live graph until you commit the nodes you accept below. Extraction takes a minute or two.
+        The source is snapshotted into the living library and an LLM proposes the claims, arguments and objections it contains, each tied to a verbatim span. Nothing enters the live graph until you commit the nodes you accept below. Extraction takes a minute or two.
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
         <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Title (optional)" style={input} disabled={running} />
@@ -144,7 +144,7 @@ function IngestSection({ workspace, onProposalCreated }) {
         {job && job.status === "failed" && <div style={{ fontSize: "10px", color: "#f87171" }}>Failed: {job.error}</div>}
         {job && job.status === "completed" && (
           <div style={{ fontSize: "10px", color: "#4ade80" }}>
-            Proposal {job.result?.proposal_id} created: {job.result?.counts?.nodes} nodes, {job.result?.counts?.edges} edges (recall source #{job.result?.source_id}).
+            Proposal {job.result?.proposal_id} created: {job.result?.counts?.nodes} nodes, {job.result?.counts?.edges} edges (library evidence {job.result?.source_id}).
           </div>
         )}
       </div>
@@ -190,7 +190,7 @@ function ProposalReview({ workspace, proposalId, onCommitted, onClose }) {
       <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px" }}>
         <span style={{ fontSize: "10px", color: "#ccc" }}>{pr.title || proposalId}</span>
         <span style={{ fontSize: "9px", color: committed ? "#4ade80" : "#fbbf24", textTransform: "uppercase" }}>{pr.status}</span>
-        <span style={{ fontSize: "9px", color: "#555" }}>{(pr.nodes || []).length} nodes · {(pr.edges || []).length} edges · source #{pr.source_id}</span>
+        <span style={{ fontSize: "9px", color: "#555" }}>{(pr.nodes || []).length} nodes · {(pr.edges || []).length} edges · evidence {pr.source_id}</span>
         <button onClick={onClose} style={btn({ marginLeft: "auto" })}>Close</button>
       </div>
       {!committed && (

@@ -255,7 +255,7 @@ class ImportRequest(BaseModel):
 
 class AttachSourceRequest(BaseModel):
     node_id: str
-    source_id: Optional[int] = None
+    evidence_id: Optional[str] = None
     url: str = ""
     quote: str = ""
     source_type: str = "document"
@@ -275,17 +275,19 @@ class RetireRequest(BaseModel):
 class ArchiveRequest(BaseModel):
     archived: bool = True
 
-class LinkBeliefRequest(BaseModel):
+class GroundBeliefRequest(BaseModel):
     belief_id: str
-    unlink: bool = False
+    note: str = ""
+    set_anchor: bool = True
+    min_derived: Optional[float] = None
 
 class CaptureBeliefRequest(BaseModel):
     belief_id: str
-    claim: str
     cluster: str
     note: str = ""
     volatility: str = "preference"
     links: list[str] = []
+    min_derived: Optional[float] = None
 
 
 # ── Workspaces (top-level listing/create) ────────────────────────────
@@ -604,6 +606,7 @@ def get_graph(name: str, s: Store = Depends(get_store)):
             "killed_by": getattr(c, "killed_by", None),
             "notes": c.notes,
             "is_root": c.is_root,
+            "claim_hash": library_client.claim_hash((c.notes or label).strip()),
         })
 
     for eid, e in s.evidence.items():
@@ -1300,7 +1303,7 @@ def unsourced_route(name: str, s: Store = Depends(get_store)):
 def attach_source_route(name: str, body: AttachSourceRequest, s: Store = Depends(get_store)):
     result = provenance.attach_source(
         s, body.node_id,
-        source_id=(body.source_id or None),
+        evidence_id=(body.evidence_id or None),
         url=(body.url or None),
         quote=(body.quote or None),
         source_type=body.source_type,
@@ -1386,7 +1389,15 @@ def commit_proposal_route(name: str, proposal_id: str, body: CommitProposalReque
     except ValueError as e:
         raise HTTPException(400, str(e))
     if s.is_git_repo():
-        s.git_commit(f"[ingest] commit {len(body.accepted_node_ids)} nodes from {proposal_id}")
+        # Acceptance is a person's act: record exactly which claim texts were
+        # accepted (by content hash) under this channel's actor.
+        hashes = []
+        for pid, real in (result.get("id_map") or {}).items():
+            obj = s.get(real)
+            text = (getattr(obj, "notes", "") or getattr(obj, "description", "") or "").strip()
+            if text:
+                hashes.append(f"Accepted: {library_client.claim_hash(text)} {pid}")
+        s.git_commit(f"[ingest] commit {len(body.accepted_node_ids)} nodes from {proposal_id}\n\n" + "\n".join(hashes))
     return {"ok": True, **result}
 
 
@@ -1417,7 +1428,12 @@ def archive_route(name: str, body: ArchiveRequest):
     return {"ok": True, "name": name, "archived": body.archived}
 
 
-# ── Living-library bridge (links, not copies) ────────────────────────
+# ── Living-library bridge: the library is the substrate ─────────────
+#
+# A workspace never owns beliefs. Which beliefs it argues for is a query
+# against the library (beliefs whose evidence includes a snapshot of this
+# workspace). Grounding writes INTO the library: a snapshot of the workspace
+# becomes evidence under the belief, and the argument becomes its anchor.
 
 @app.get("/api/library/status")
 def library_status():
@@ -1433,53 +1449,43 @@ def library_search(q: str = "", cluster: str = "", limit: int = 30):
 
 @app.get("/api/workspaces/{name}/beliefs")
 def workspace_beliefs(name: str, s: Store = Depends(get_store)):
-    ids = list((s.foundations.get("library_beliefs") or {}).keys()) if isinstance(s.foundations.get("library_beliefs"), dict) else list(s.foundations.get("library_beliefs") or [])
-    found = library_client.get_many(ids) if (ids and library_client.available()) else []
-    known = {b["id"] for b in found}
-    return {
-        "available": library_client.available(),
-        "beliefs": found,
-        "missing": [i for i in ids if i not in known],
-    }
+    """Beliefs grounded in this workspace — derived from the library, not stored here."""
+    avail = library_client.available()
+    return {"available": avail, "reason": library_client.unavailable_reason(),
+            "beliefs": library_client.beliefs_citing(name) if avail else [],
+            "anchor_command": library_client.anchor_command(name)}
 
 
-@app.post("/api/workspaces/{name}/beliefs")
-def workspace_link_belief(name: str, body: LinkBeliefRequest, s: Store = Depends(get_store)):
-    ids = s.foundations.get("library_beliefs") or []
-    if isinstance(ids, dict):
-        ids = list(ids.keys())
-    if body.unlink:
-        ids = [i for i in ids if i != body.belief_id]
-    elif body.belief_id not in ids:
-        ids.append(body.belief_id)
-    s.foundations["library_beliefs"] = ids
-    s.save()
-    _git_commit_manual(s, f"{'Unlink' if body.unlink else 'Link'} library belief {body.belief_id}")
-    return {"ok": True, "library_beliefs": ids}
+@app.post("/api/workspaces/{name}/snapshot")
+def workspace_snapshot(name: str, s: Store = Depends(get_store)):
+    r = library_client.snapshot_workspace(s, name)
+    if not r["ok"]:
+        raise HTTPException(503, r.get("reason") or "library unavailable")
+    return r
+
+
+@app.post("/api/workspaces/{name}/ground-belief")
+def workspace_ground_belief(name: str, body: GroundBeliefRequest, s: Store = Depends(get_store)):
+    """Ground an existing library belief in this workspace (snapshot + anchor)."""
+    _autosave_if_dirty(s, "snapshot before grounding")
+    r = library_client.ground_belief(s, belief_id=body.belief_id, name=name, note=body.note,
+                                     set_anchor=body.set_anchor, min_derived=body.min_derived)
+    if not r.get("ok"):
+        raise HTTPException(400, r.get("reason", "grounding failed"))
+    return r
 
 
 @app.post("/api/workspaces/{name}/capture-belief")
 def workspace_capture_belief(name: str, body: CaptureBeliefRequest, s: Store = Depends(get_store)):
-    """Capture the thesis into the living library as a derived belief grounded in
-    this workspace, then link it back. Written under this process's agent
-    identity — the owner stands behind it later, from their own channel."""
-    commit = None
-    if s.is_git_repo():
-        log = s.git_log(max_count=1)
-        commit = log[0]["hash"][:12] if log else None
-    r = library_client.capture_thesis(
-        belief_id=body.belief_id, claim=body.claim, cluster=body.cluster,
-        workspace=name, commit=commit, note=body.note, links=body.links,
-        volatility=body.volatility,
-    )
+    """Capture the thesis into the library as a NEW derived belief grounded in
+    this workspace and anchored to the argument. Written under this process's
+    agent identity — the owner stands behind it later, from their own channel."""
+    _autosave_if_dirty(s, "snapshot before capture")
+    r = library_client.capture_thesis(store=s, belief_id=body.belief_id, cluster=body.cluster,
+                                      name=name, note=body.note, links=body.links,
+                                      volatility=body.volatility, min_derived=body.min_derived)
     if not r.get("ok"):
         raise HTTPException(400, r.get("reason", "capture failed"))
-    ids = s.foundations.get("library_beliefs") or []
-    if body.belief_id not in ids:
-        ids.append(body.belief_id)
-        s.foundations["library_beliefs"] = ids
-        s.save()
-        _git_commit_manual(s, f"Capture thesis as library belief {body.belief_id}")
     return r
 
 

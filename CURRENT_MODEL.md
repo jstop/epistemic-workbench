@@ -1,5 +1,13 @@
 # CURRENT_MODEL.md — what the workbench actually is
 
+> **Addendum 2026-09-15.** The recall integration described in §1 and §8 below
+> was replaced: the living library (`~/workspace/epistemic/memory`) is now the
+> one provenance substrate. `recall_client.py` is gone; `library_client.py`
+> registers evidence, snapshots workspaces, and grounds beliefs. Recall retires
+> in a later phase. See README "The living library is the substrate" and the
+> design memo linked there. The rest of this file is the as-built record of
+> F1–F5 and still describes the object model accurately.
+
 Reconstructed by reading the source (`epist/model.py`, `engine.py`, `store.py`,
 `llm.py`, `agent.py`, `compare.py`, `cli.py`, `mcp_server.py`) and sample
 workspace JSON. This is the ground truth to reconcile the feature brief (§4)

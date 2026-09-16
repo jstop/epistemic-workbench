@@ -628,11 +628,12 @@ function LibrarySection({ workspace, thesis, onUpdated }) {
   const [data, setData] = useState(null);
   const [q, setQ] = useState("");
   const [results, setResults] = useState([]);
-  const [mode, setMode] = useState(null); // null | "search" | "capture"
+  const [mode, setMode] = useState(null); // null | "ground" | "capture"
   const [capId, setCapId] = useState("");
   const [capCluster, setCapCluster] = useState("Positions & writing");
   const [capNote, setCapNote] = useState("");
   const [msg, setMsg] = useState(null);
+  const [busy, setBusy] = useState(false);
 
   const load = () => {
     if (!workspace) return;
@@ -641,70 +642,76 @@ function LibrarySection({ workspace, thesis, onUpdated }) {
   useEffect(load, [workspace]);
 
   useEffect(() => {
-    if (mode !== "search" || q.trim().length < 2) { setResults([]); return; }
+    if (mode !== "ground" || q.trim().length < 2) { setResults([]); return; }
     const t = setTimeout(() => api.searchBeliefs(q.trim()).then(setResults).catch(() => setResults([])), 250);
     return () => clearTimeout(t);
   }, [q, mode]);
 
   if (!data) return null;
   const slug = (t) => (t || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
-  const linked = data.beliefs || [];
+  const grounded = data.beliefs || [];
 
-  const link = async (id) => { await api.linkBelief(workspace, id); setMode(null); setQ(""); load(); };
-  const unlink = async (id) => { await api.linkBelief(workspace, id, true); load(); };
-  const capture = async () => {
-    setMsg(null);
+  const ground = async (id) => {
+    setBusy(true); setMsg(null);
     try {
-      const r = await api.captureBelief(workspace, {
-        belief_id: capId || `wb-${slug(workspace)}`,
-        claim: thesis.notes || thesis.label,
-        cluster: capCluster, note: capNote,
-      });
-      setMsg(r.warning ? `Captured with warning: ${r.warning}` : `Captured as ${r.belief.id} (${r.belief.stance}). Recorded under the web channel's agent identity; stand behind it from your own terminal to make it your word.`);
+      const r = await api.groundBelief(workspace, { belief_id: id, note: "" });
+      setMsg(`Grounded ${r.belief.id} in this workspace at ${r.commit || "(uncommitted)"}. Its anchor now re-runs this argument.`);
+      setMode(null); setQ(""); load();
+    } catch (err) { setMsg(err.message); }
+    finally { setBusy(false); }
+  };
+  const capture = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const r = await api.captureBelief(workspace, { belief_id: capId || `wb-${slug(workspace)}`, cluster: capCluster, note: capNote });
+      setMsg(r.warning ? `Captured with warning: ${r.warning}` : `Captured ${r.belief.id} (${r.belief.stance}) grounded in this workspace at ${r.commit || "(uncommitted)"}. Recorded under the web channel's agent identity; stand behind it from your own terminal to make it your word.`);
       setMode(null); load();
       if (onUpdated) onUpdated();
     } catch (err) { setMsg(err.message); }
+    finally { setBusy(false); }
   };
+
+  const inputStyle = { width: "100%", background: "#0A0A0A", border: "1px solid #222", borderRadius: "3px", color: "#e0e0e0", padding: "7px 9px", fontSize: "11px", fontFamily: "'JetBrains Mono', monospace", outline: "none", boxSizing: "border-box" };
 
   return (
     <div style={{ background: "#141414", borderRadius: "4px", padding: "10px" }}>
       <div style={{ display: "flex", alignItems: "center", marginBottom: "8px", gap: "6px" }}>
         <span style={{ fontSize: "9px", color: "#555", letterSpacing: "1px", textTransform: "uppercase" }}>
-          Living library · linked beliefs ({linked.length})
+          Living library · beliefs grounded in this workspace ({grounded.length})
         </span>
-        {!data.available && <span style={{ fontSize: "9px", color: "#f87171" }}>library unavailable</span>}
+        {!data.available && <span style={{ fontSize: "9px", color: "#f87171" }} title={data.reason || ""}>library unavailable</span>}
         {data.available && (
           <div style={{ marginLeft: "auto", display: "flex", gap: "4px" }}>
-            <button onClick={() => setMode(mode === "search" ? null : "search")} style={linkBtnStyle("#60a5fa")}>Link belief</button>
+            <button onClick={() => setMode(mode === "ground" ? null : "ground")} style={linkBtnStyle("#60a5fa")}>Ground a belief here</button>
             {thesis && <button onClick={() => { setMode(mode === "capture" ? null : "capture"); setCapId(`wb-${slug(workspace)}`); }} style={linkBtnStyle("#FF6B35")}>Capture thesis as belief</button>}
           </div>
         )}
       </div>
-      {linked.length === 0 && mode === null && (
-        <div style={{ fontSize: "10px", color: "#444", fontStyle: "italic" }}>
-          No library beliefs linked. A workspace argues for something; link the belief it argues for, or capture the thesis into the library.
-        </div>
+      <div style={{ fontSize: "9px", color: "#555", lineHeight: 1.5, marginBottom: "8px" }}>
+        The library is the substrate. A belief grounds in this workspace: a snapshot at the current commit becomes evidence under it, and its anchor re-runs the argument (<span style={{ fontFamily: "'JetBrains Mono', monospace" }}>verify-thesis</span>). The workspace keeps no list of beliefs; this is a query.
+      </div>
+      {grounded.length === 0 && mode === null && (
+        <div style={{ fontSize: "10px", color: "#444", fontStyle: "italic" }}>No library belief cites this workspace yet.</div>
       )}
-      {linked.map((b) => (
+      {grounded.map((b) => (
         <div key={b.id} style={{ padding: "6px 8px", background: "#0A0A0A", borderRadius: "3px", marginBottom: "4px", fontSize: "10px", borderLeft: `3px solid ${STANCE_COLORS[b.stance] || "#555"}` }}>
           <div style={{ display: "flex", gap: "6px", alignItems: "baseline" }}>
             <span style={{ color: STANCE_COLORS[b.stance] || "#888", fontSize: "9px", letterSpacing: "1px", flexShrink: 0 }}>{b.stance}</span>
             <span style={{ color: "#ccc", lineHeight: 1.4 }}>{b.claim}</span>
-            <button onClick={() => unlink(b.id)} style={{ ...linkBtnStyle("#555"), marginLeft: "auto", flexShrink: 0 }}>unlink</button>
           </div>
           <div style={{ color: "#555", fontSize: "9px", marginTop: "2px" }}>
             {b.id} · {b.method} · {b.freshness}{b.stood_behind_by ? ` · stood behind by ${b.stood_behind_by}` : " · not yet stood behind by the owner"}
+            {b.snapshots?.length ? ` · ${b.snapshots.length} snapshot${b.snapshots.length === 1 ? "" : "s"}, latest ${b.snapshots[b.snapshots.length - 1].uri.split("@")[1] || ""}` : ""}
           </div>
+          {b.anchor && <div style={{ color: "#444", fontSize: "9px", marginTop: "2px", fontFamily: "'JetBrains Mono', monospace", wordBreak: "break-all" }}>anchor: {b.anchor}</div>}
         </div>
       ))}
-      {data.missing?.length > 0 && <div style={{ fontSize: "9px", color: "#f87171" }}>Linked but not found in the library: {data.missing.join(", ")}</div>}
-      {mode === "search" && (
+      {mode === "ground" && (
         <div style={{ marginTop: "8px" }}>
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search beliefs by claim or id…" autoFocus
-            style={{ width: "100%", background: "#0A0A0A", border: "1px solid #222", borderRadius: "3px", color: "#e0e0e0", padding: "7px 9px", fontSize: "11px", fontFamily: "'JetBrains Mono', monospace", outline: "none", boxSizing: "border-box" }} />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search beliefs by claim or id, then pick one to ground here…" autoFocus style={inputStyle} />
           <div style={{ maxHeight: "220px", overflow: "auto", marginTop: "4px" }}>
             {results.map((b) => (
-              <div key={b.id} onClick={() => link(b.id)} style={{ padding: "5px 8px", cursor: "pointer", fontSize: "10px", borderLeft: `3px solid ${STANCE_COLORS[b.stance] || "#555"}`, borderBottom: "1px solid #1a1a1a" }}>
+              <div key={b.id} onClick={() => !busy && ground(b.id)} style={{ padding: "5px 8px", cursor: busy ? "wait" : "pointer", fontSize: "10px", borderLeft: `3px solid ${STANCE_COLORS[b.stance] || "#555"}`, borderBottom: "1px solid #1a1a1a" }}>
                 <span style={{ color: STANCE_COLORS[b.stance] || "#888", fontSize: "9px", marginRight: "6px" }}>{b.stance}</span>
                 <span style={{ color: "#bbb" }}>{b.claim}</span>
               </div>
@@ -715,18 +722,18 @@ function LibrarySection({ workspace, thesis, onUpdated }) {
       {mode === "capture" && (
         <div style={{ marginTop: "8px", display: "flex", flexDirection: "column", gap: "6px" }}>
           <div style={{ fontSize: "9px", color: "#777", lineHeight: 1.5 }}>
-            Captures the thesis as a <b>derived</b> belief whose evidence is this workspace at its current commit. It is written under the web channel's agent identity; it becomes your word only when you stand behind it from your own terminal.
+            Captures the thesis as a <b>derived</b> belief whose evidence is this workspace at its current commit, anchored to the argument. Written under the web channel's agent identity; it becomes your word only when you stand behind it from your own terminal.
           </div>
-          <input value={capId} onChange={(e) => setCapId(e.target.value)} placeholder="belief id (kebab-case)" style={{ background: "#0A0A0A", border: "1px solid #222", borderRadius: "3px", color: "#e0e0e0", padding: "7px 9px", fontSize: "11px", fontFamily: "'JetBrains Mono', monospace", outline: "none" }} />
-          <input value={capCluster} onChange={(e) => setCapCluster(e.target.value)} placeholder="cluster" style={{ background: "#0A0A0A", border: "1px solid #222", borderRadius: "3px", color: "#e0e0e0", padding: "7px 9px", fontSize: "11px", fontFamily: "'JetBrains Mono', monospace", outline: "none" }} />
-          <input value={capNote} onChange={(e) => setCapNote(e.target.value)} placeholder="note (optional)" style={{ background: "#0A0A0A", border: "1px solid #222", borderRadius: "3px", color: "#e0e0e0", padding: "7px 9px", fontSize: "11px", fontFamily: "'JetBrains Mono', monospace", outline: "none" }} />
+          <input value={capId} onChange={(e) => setCapId(e.target.value)} placeholder="belief id (kebab-case)" style={inputStyle} />
+          <input value={capCluster} onChange={(e) => setCapCluster(e.target.value)} placeholder="cluster" style={inputStyle} />
+          <input value={capNote} onChange={(e) => setCapNote(e.target.value)} placeholder="note (optional)" style={inputStyle} />
           <div style={{ display: "flex", gap: "4px" }}>
-            <button onClick={capture} disabled={!capId} style={linkBtnStyle("#FF6B35")}>Capture</button>
+            <button onClick={capture} disabled={!capId || busy} style={linkBtnStyle("#FF6B35")}>{busy ? "Capturing…" : "Capture"}</button>
             <button onClick={() => setMode(null)} style={linkBtnStyle("#555")}>Cancel</button>
           </div>
         </div>
       )}
-      {msg && <div style={{ fontSize: "10px", color: msg.startsWith("Captured as") ? "#4ade80" : "#fbbf24", marginTop: "6px", lineHeight: 1.5 }}>{msg}</div>}
+      {msg && <div style={{ fontSize: "10px", color: msg.startsWith("Grounded") || msg.startsWith("Captured ") ? "#4ade80" : "#fbbf24", marginTop: "6px", lineHeight: 1.5 }}>{msg}</div>}
     </div>
   );
 }

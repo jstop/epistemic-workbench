@@ -142,11 +142,61 @@ def test_library_bridge_degrades_when_unavailable(client):
     assert client.get("/api/library/beliefs?q=x").status_code == 503
     r = client.get(f"/api/workspaces/{ws}/beliefs").json()
     assert r["available"] is False and r["beliefs"] == []
-    # linking still records the intent on the workspace side
-    r = client.post(f"/api/workspaces/{ws}/beliefs", json={"belief_id": "some-belief"})
-    assert r.status_code == 200 and r.json()["library_beliefs"] == ["some-belief"]
-    r = client.get(f"/api/workspaces/{ws}/beliefs").json()
-    assert r["missing"] == ["some-belief"]
-    r = client.post(f"/api/workspaces/{ws}/capture-belief", json={
-        "belief_id": "x", "claim": "c", "cluster": "k"})
-    assert r.status_code == 400
+    assert "verify-thesis" in r["anchor_command"]
+    assert client.post(f"/api/workspaces/{ws}/snapshot", json={}).status_code == 503
+    assert client.post(f"/api/workspaces/{ws}/ground-belief", json={"belief_id": "x"}).status_code == 400
+    assert client.post(f"/api/workspaces/{ws}/capture-belief", json={"belief_id": "x", "cluster": "k"}).status_code == 400
+
+
+@pytest.fixture()
+def client_with_library(tmp_path, monkeypatch, temp_library):
+    monkeypatch.setenv("EPIST_WORKSPACES", str(tmp_path / "ws"))
+    import web.server as server
+    importlib.reload(server)
+    from fastapi.testclient import TestClient
+    return TestClient(server.app), temp_library
+
+
+def test_belief_grounds_in_workspace_not_the_reverse(client_with_library):
+    client, eng = client_with_library
+    ws = _mk(client, "sky")
+    t = _claim(client, ws, "the sky is blue", node_type="thesis", confidence=0.7)
+    p = _claim(client, ws, "light scatters", confidence=0.9)
+    client.post(f"/api/workspaces/{ws}/add-argument", json={"conclusion_id": t, "premise_ids": [p]})
+    # an existing belief, asserted from chat, with no evidence yet
+    eng.get_log().form_belief(belief_id="sky-blue", claim="the sky is blue", method="asserted",
+                              volatility="structural", unsupported=True)
+    assert client.get(f"/api/workspaces/{ws}/beliefs").json()["beliefs"] == []
+
+    r = client.post(f"/api/workspaces/{ws}/ground-belief", json={"belief_id": "sky-blue"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["uri"].startswith("epist-workspace://sky@")
+    # the library now holds the snapshot as evidence under the belief, with the thesis as a located span
+    b = eng.get_log().state()["beliefs"]["sky-blue"]
+    assert body["evidence_id"] in b["evidence_ids"]
+    assert b["grounding"][0]["quote"] == "THESIS: the sky is blue"
+    assert "verify-thesis sky" in b["anchor"]
+    assert b["unsupported"] is False
+    assert b["authorship"]["composed_by"] == "test:fixture" or b["claim"] == "the sky is blue"
+    # and the workspace-side view is a query, not a stored list
+    cited = client.get(f"/api/workspaces/{ws}/beliefs").json()["beliefs"]
+    assert [c["id"] for c in cited] == ["sky-blue"]
+    assert cited[0]["snapshots"][0]["uri"] == body["uri"]
+    exp = client.get(f"/api/workspaces/{ws}/export").json()
+    assert "library_beliefs" not in exp["foundations"]
+
+
+def test_capture_thesis_creates_derived_anchored_belief(client_with_library):
+    client, eng = client_with_library
+    ws = _mk(client, "cap")
+    _claim(client, ws, "identity must be accountable", node_type="thesis", confidence=0.6)
+    r = client.post(f"/api/workspaces/{ws}/capture-belief", json={"belief_id": "wb-cap", "cluster": "Positions"})
+    assert r.status_code == 200, r.text
+    b = eng.get_log().state()["beliefs"]["wb-cap"]
+    assert b["method"] == "derived" and b["claim"] == "identity must be accountable"
+    assert b["evidence_ids"] and b["grounding"][0]["evidence_id"] == b["evidence_ids"][0]
+    assert "verify-thesis cap" in b["anchor"]
+    assert b["authorship"]["stood_behind_by"] is None  # an agent wrote it; the owner has not stood behind it
+    g = client.get(f"/api/workspaces/{ws}/graph").json()
+    assert all(len(n["claim_hash"]) == 64 for n in g["nodes"] if n["type"] == "claim")

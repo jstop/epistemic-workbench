@@ -5,7 +5,7 @@ import pytest
 
 from epist.store import Store
 from epist.model import Evidence
-from epist import provenance, recall_client
+from epist import provenance, library_client
 
 
 # ── Pure classification (no recall needed) ───────────────────────────
@@ -41,78 +41,53 @@ def test_list_unsourced_returns_exactly_the_asserted(tmp_path):
     assert counts == {"recorded": 1, "asserted": 2, "total": 3}
 
 
-def test_attach_source_degrades_when_recall_unavailable(tmp_path, monkeypatch):
-    """If recall can't be reached, evidence must NOT be faked as recorded."""
-    monkeypatch.setattr(recall_client, "source_exists", lambda sid: False)
-    monkeypatch.setattr(recall_client, "record_source", lambda **k: None)
+def test_attach_source_degrades_when_library_unavailable(tmp_path, no_library):
+    """If the library can't be reached, evidence must NOT be faked as recorded."""
     s = Store(tmp_path / "ws")
-    ev = s.add_evidence(Evidence(title="x", description="d"))
-    # bad/unknown source id → stays asserted
-    r1 = provenance.attach_source(s, ev.id, source_id=999)
-    assert r1["ok"] is False
-    assert provenance.provenance_kind(s.evidence[ev.id]) == "asserted"
-    # url path with recall down → url stored but still asserted
-    r2 = provenance.attach_source(s, ev.id, url="https://example.org", quote="q")
-    assert r2["ok"] is False
-    assert provenance.provenance_kind(s.evidence[ev.id]) == "asserted"
-
-
-def test_attach_source_rejects_non_evidence(tmp_path):
-    from epist.graph_io import add_claim
-    s = Store(tmp_path / "ws")
-    c = add_claim(s, "a claim")
-    r = provenance.attach_source(s, c.id, source_id=1)
+    ev = s.add_evidence(Evidence(title="t", description="d"))
+    r = provenance.attach_source(s, ev.id, evidence_id="evd_nope")
     assert r["ok"] is False
-    assert "evidence" in r["reason"].lower()
+    assert provenance.provenance_kind(s.evidence[ev.id]) == "asserted"
+    # url path with library down → url stored but still asserted
+    r = provenance.attach_source(s, ev.id, url="https://example.org/x")
+    assert r["ok"] is False
+    assert provenance.provenance_kind(s.evidence[ev.id]) == "asserted"
+    assert s.evidence[ev.id].provenance["url"] == "https://example.org/x"
 
 
-# ── Real recall integration (temp db; skips if recall not importable) ──
+# ── Real library integration (temp canonical store) ──────────────────
 
-@pytest.fixture
-def recall_db(monkeypatch):
-    """Point recall at a throwaway db and hand the test the live module.
-    Uses a tempfile dir (not pytest's tmp_path, which is subject to mid-session
-    retention cleanup that races with the long-lived sqlite file)."""
-    with tempfile.TemporaryDirectory() as d:
-        monkeypatch.setenv("RECALL_DB", str(__import__("os").path.join(d, "recall.db")))
-        recall_client.reset_cache()
-        db = recall_client._db()
-        if db is None:
-            pytest.skip("recall package not importable")
-        yield db
-        recall_client.reset_cache()
-
-
-def test_attach_real_recall_source_flips_to_recorded(tmp_path, recall_db):
-    db = recall_db
-    sid = db.record_source(source_type="document", content="A real consulted source.")
+def test_attach_real_library_evidence_flips_to_recorded(tmp_path, temp_library):
+    eng = temp_library
+    eid = eng.get_log().register_evidence(media_type="text/plain", content="A real consulted source.")
     s = Store(tmp_path / "ws")
     ev = s.add_evidence(Evidence(title="real", description="d"))
     assert provenance.provenance_kind(ev) == "asserted"
 
-    r = provenance.attach_source(s, ev.id, source_id=sid)
+    r = provenance.attach_source(s, ev.id, evidence_id=eid)
     assert r["ok"] is True and r["kind"] == "recorded"
     assert provenance.provenance_kind(s.evidence[ev.id]) == "recorded"
-    assert s.evidence[ev.id].provenance["source_id"] == sid
+    assert s.evidence[ev.id].provenance["evidence_id"] == eid
 
 
-def test_attach_url_registers_recall_source(tmp_path, recall_db):
-    db = recall_db
+def test_attach_url_registers_library_evidence(tmp_path, temp_library):
+    eng = temp_library
     s = Store(tmp_path / "ws")
     ev = s.add_evidence(Evidence(title="webby", description="d"))
     r = provenance.attach_source(s, ev.id, url="https://example.org/paper",
                                  quote="key finding", source_type="web_fetch")
     assert r["ok"] is True and r["kind"] == "recorded"
-    assert isinstance(r["source_id"], int)
-    # the evidence's claim text now traces back to a real recall source
-    traced = db.trace_derivation(claim_text=(ev.title + " — " + ev.description))
-    assert any(row["source_record_id"] is not None for row in traced)
+    e = eng.get_log().state()["evidence"][r["evidence_id"]]
+    assert e["uri"] == "https://example.org/paper"
+    assert e["durability"] == "SNAPSHOTTED"  # the quote is content-addressed
+    assert e["metadata"]["source"] == "epistemic-workbench"
 
 
-def test_asserted_evidence_shows_as_orphan_in_recall(tmp_path, recall_db):
-    """mark_asserted records a pattern_match (orphan) — recall's anti-confab view."""
-    db = recall_db
-    ev = Evidence(title="invented", description="confabulated citation")
-    provenance.mark_asserted(ev, recall_text="invented — confabulated citation")
-    orphans = db.list_orphan_derivations()
-    assert any("invented" in (o.get("claim_text") or "") for o in orphans)
+def test_legacy_recall_source_id_is_no_longer_accepted(tmp_path, temp_library):
+    s = Store(tmp_path / "ws")
+    ev = s.add_evidence(Evidence(title="old", description="d"))
+    r = provenance.attach_source(s, ev.id, source_id=42)
+    assert r["ok"] is False and "recall" in r["reason"]
+    # but a legacy record already on disk still READS as recorded
+    ev.provenance = {"kind": "recorded", "source_id": 42}
+    assert provenance.provenance_kind(ev) == "recorded"

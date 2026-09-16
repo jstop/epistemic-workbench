@@ -1093,33 +1093,33 @@ async def import_graph(workspace: str, graph_json: str, mode: str = "merge") -> 
     return f"Imported ({summary.get('mode')} shape, {mode}) — {parts}"
 
 
-# ── F2: provenance (recall integration) ───────────────────────────────
+# ── F2: provenance (living-library evidence) ─────────────────────────
 
 @mcp.tool()
 @_log_tool
-async def attach_source(workspace: str, node_id: str, source_id: int = 0,
+async def attach_source(workspace: str, node_id: str, evidence_id: str = "",
                         url: str = "", quote: str = "",
                         source_type: str = "document") -> str:
     """Attach a REAL source to an evidence node, flipping it from asserted to recorded.
 
-    Provide EITHER a recall source_id (from recall.record_source) OR an explicit
-    url (+ optional quote), which is registered in recall to earn a source id.
-    If recall is unreachable or the source_id doesn't exist, the node stays
-    'asserted' — recorded provenance is never faked.
+    Provide EITHER a living-library evidence_id OR an explicit url (+ optional
+    quote), which is registered in the library as evidence. If the library is
+    unreachable or the evidence_id doesn't exist, the node stays 'asserted' —
+    recorded provenance is never faked.
 
     Args:
         workspace: Workspace name or path
         node_id: id (or prefix) of the evidence node
-        source_id: a recall source_record id (omit/0 to use url instead)
-        url: source URL (used when no source_id is given)
-        quote: optional supporting quote from the source
-        source_type: recall source type for a url (document, web_fetch, …)
+        evidence_id: a library evidence id (omit to use url instead)
+        url: source URL (used when no evidence_id is given)
+        quote: optional supporting quote from the source (snapshotted as content)
+        source_type: descriptive source type for a url (document, web_fetch, …)
     """
     from epist import provenance
     s = _get_store(workspace)
     result = provenance.attach_source(
         s, node_id,
-        source_id=(source_id or None),
+        evidence_id=(evidence_id or None),
         url=(url or None),
         quote=(quote or None),
         source_type=source_type,
@@ -1128,7 +1128,7 @@ async def attach_source(workspace: str, node_id: str, source_id: int = 0,
         if s.is_git_repo():
             s.git_commit(f"[manual] Attach source to evidence {node_id[:12]}")
         return (f"Evidence `{node_id[:16]}` is now **recorded** "
-                f"(recall source_id={result['source_id']}).")
+                f"(library evidence {result['evidence_id']}).")
     return f"Not recorded — {result.get('reason', 'unknown error')}"
 
 
@@ -1137,7 +1137,7 @@ async def attach_source(workspace: str, node_id: str, source_id: int = 0,
 async def list_unsourced(workspace: str) -> str:
     """List evidence nodes lacking a recorded source (the asserted/unverified ones).
 
-    Mirrors recall.list_orphan_derivations — the anti-confabulation view.
+    The anti-confabulation view: evidence with a source string but nothing behind it.
 
     Args:
         workspace: Workspace name or path
@@ -1172,7 +1172,7 @@ async def _do_ingest(workspace: str, source_text: str, url: str, title: str) -> 
     c = result["counts"]
     return (
         f"**Proposal `{result['proposal_id']}`** created (nothing committed yet).\n\n"
-        f"- recall source_id: {result['source_id']}\n"
+        f"- library evidence: {result['source_id']}\n"
         f"- Proposed: {c['nodes']} nodes, {c['edges']} edges\n\n"
         f"Review with **review_proposal**, then **commit_proposal** with the "
         f"node ids you accept."
@@ -1185,7 +1185,7 @@ async def ingest_document(workspace: str, source_text: str = "", url: str = "",
                           title: str = "") -> str:
     """Ingest a document/transcript and PROPOSE the argumentation it contains.
 
-    Registers the source in recall, extracts proposed claims/arguments/objections
+    Registers the source in the living library, extracts proposed claims/arguments/objections
     — each grounded in a verbatim source span — and saves them as a pending
     proposal. NOTHING enters the live graph until you commit_proposal. Runs in
     the background (LLM extraction); poll job_status.
@@ -1247,7 +1247,7 @@ async def commit_proposal(workspace: str, proposal_id: str,
     """Commit accepted nodes from an ingestion proposal into the live graph.
 
     Only the nodes you list are committed (and edges between accepted nodes).
-    Accepted nodes get real provenance recorded in recall back to the source.
+    Accepted nodes carry provenance back to the library evidence of the source.
 
     Args:
         workspace: Workspace name or path
@@ -1277,7 +1277,7 @@ async def commit_proposal(workspace: str, proposal_id: str,
     c = result["committed"]
     return (f"Committed from `{proposal_id}`: {c['claims']} claims, "
             f"{c['evidence']} evidence, {c['arguments']} arguments, {c['edges']} edges "
-            f"({result['skipped']} skipped). Sourced to recall id {result['source_id']}.")
+            f"({result['skipped']} skipped). Source evidence: {result['source_id']}.")
 
 
 # ── Fork-and-merge tools ─────────────────────────────────────────────

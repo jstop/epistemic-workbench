@@ -38,9 +38,9 @@ F1–F5 decisions.
 ## Rules the engine now enforces
 
 - **A source string is not provenance.** Evidence that is merely asserted starts
-  `provisional` in the ATMS, never `accepted`; only evidence with a recorded
-  source (attached through recall) is grounded. Generated graphs are asserted
-  until you attach sources.
+  `provisional` in the ATMS, never `accepted`; only evidence registered in the
+  living library (a snapshot or a referenced uri) is grounded. Generated graphs
+  are asserted until you attach sources.
 - **Deletion loses the dialectic.** Claims are superseded or retired, never
   removed; both stay in the graph as dimmed history with the reason kept.
 - **Who wrote it is a property of the channel.** Every workspace commit carries
@@ -49,16 +49,34 @@ F1–F5 decisions.
   rename), `owner` from an interactive terminal, `agent:cli` from a script.
   Commits from before this rule read as `unattributed`.
 
-## Living-library bridge
+## The living library is the substrate
 
-The workbench and the living library (`~/workspace/epistemic/memory`) stay
-separate stores. A workspace can link the beliefs it argues for (shown in the
-Summary with their stance), and a thesis can be captured into the library as a
-`derived` belief whose evidence is the workspace at its current commit. Captures
-are written under the workbench's own agent identity; they become the owner's
-word only when stood behind from the owner's terminal. If the library is not
-present (`EPIST_MEMORY_PATH`), the bridge reports unavailable and nothing else
-is affected.
+Decided 2026-09-15: the library's canonical log (`~/workspace/epistemic/memory`)
+is the one provenance substrate. The workbench is an interpreter over it and
+never owns beliefs.
+
+- Sources a workspace cites are registered in the library as evidence; the
+  workspace stores the library `evidence_id`. Ingested documents are
+  content-addressed snapshots there.
+- A belief **grounds in** a workspace, never the reverse: `ground-belief`
+  snapshots the workspace at its commit into the library
+  (`epist-workspace://<name>@<commit>`), adds it under the belief with the
+  thesis as a located span, and sets the belief's anchor to
+  `epist verify-thesis <name>`, which exits 2 when the thesis is defeated and 3
+  when its derived confidence is below `--min-derived`. The library's
+  `memory_verify` then literally re-runs the argument.
+- Which beliefs a workspace argues for is a query against the library (beliefs
+  whose evidence includes a snapshot of it), shown in the Summary tab.
+- `capture-belief` creates a new `derived` belief from the thesis, grounded and
+  anchored the same way. Captures are written under the workbench's own agent
+  identity and become the owner's word only when stood behind from the owner's
+  terminal.
+- Every claim carries its content hash (sha256 of the text, unnormalised); an
+  accepted ingestion proposal records the accepted hashes in its commit.
+
+If the library is not present (`EPIST_MEMORY_PATH`), the bridge reports
+unavailable and evidence stays asserted. The design memo with the full decision
+record: https://claude.ai/artifact/9zBDqaNorWVwLkvBKqTRMg
 
 ## Workspaces
 
