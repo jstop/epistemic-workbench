@@ -72,3 +72,35 @@ def test_generate_full_graph_stamps_asserted(monkeypatch, tmp_path):
             f"generated evidence {ev.title!r} must be asserted, not recorded"
     # all generated evidence is unsourced by construction
     assert len(provenance.list_unsourced(s)) == len(s.evidence)
+
+
+def test_generate_records_a_run_with_the_snapshot_as_output(tmp_path, monkeypatch, temp_library):
+    from epist import llm, library_client
+    fake = {"thesis": {"subject": "a", "predicate": "b", "object": "c", "confidence": 0.6},
+            "claims": [], "evidence": [{"title": "t", "description": "d", "source": "x"}],
+            "arguments": [], "assumptions": [], "defeaters": []}
+
+    class _FakeMessages:
+        def create(self, **kwargs):
+            class _R:
+                content = [type("blk", (), {"text": __import__("json").dumps(fake)})()]
+            return _R()
+
+    class _FakeClient:
+        messages = _FakeMessages()
+
+    monkeypatch.setattr(llm, "get_client", lambda: _FakeClient())
+    s = Store(tmp_path / "gen-ws")
+    s.init_workspace()
+    llm.generate_full_graph(s, "thesis text")
+    runs = [r for r in temp_library.get_log().state()["runs"].values() if r["kind"] == "generate"]
+    assert len(runs) == 1
+    run = runs[0]
+    assert run["interpreter"] == f"epistemic-workbench/generate@{llm.GENERATE_MODEL}"
+    assert run["params"]["workspace"] == "gen-ws"
+    assert run["params"]["thesis_hash"] == library_client.claim_hash("thesis text")
+    out = run["outputs"][0]
+    assert out["type"] == "workspace-snapshot" and out["evidence"] == 1
+    e = temp_library.get_log().state()["evidence"][out["id"]]
+    assert e["metadata"]["produced_by"] == "generate"
+    assert "THESIS: thesis text" in temp_library.get_log().evidence_content(out["id"]).decode()

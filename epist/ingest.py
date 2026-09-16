@@ -61,13 +61,16 @@ Rules:
 """
 
 
+EXTRACTOR_MODEL = "claude-opus-4-6"
+
+
 def llm_extractor(text: str) -> dict:
     """Production extractor: ask the LLM to surface the argumentation present in
     `text`, each node grounded in a verbatim span. Returns {nodes, edges}."""
     from .llm import get_client, _parse_llm_json
     client = get_client()
     resp = client.messages.create(
-        model="claude-opus-4-6",
+        model=EXTRACTOR_MODEL,
         max_tokens=8000,
         messages=[{"role": "user",
                    "content": f"{INGEST_PROMPT}\n\n=== DOCUMENT ===\n{text}"}],
@@ -83,6 +86,16 @@ def llm_extractor(text: str) -> dict:
     edges = [e for e in data.get("edges", [])
              if (e.get("from") in kept_ids and e.get("to") in kept_ids)]
     return {"nodes": kept, "edges": edges}
+
+
+llm_extractor.identity = f"epistemic-workbench/ingest@{EXTRACTOR_MODEL}"
+
+
+def _extractor_identity(extractor) -> str:
+    ident = getattr(extractor, "identity", None)
+    if ident:
+        return ident
+    return library_client.interpreter_id(f"ingest-{getattr(extractor, '__name__', 'extractor')}")
 
 
 def _proposals_path(store) -> Path:
@@ -121,11 +134,46 @@ def ingest_document(store, source_text=None, source_ref=None, extractor=None,
                   "title": (title or text[:200])},
     )
 
+    import datetime as _dt
+    started = _dt.datetime.now(_dt.timezone.utc).isoformat()
     proposed = extractor(text) or {}
     nodes = proposed.get("nodes", [])
     edges = proposed.get("edges", [])
+    interpreter = _extractor_identity(extractor)
 
     proposal_id = f"prop-{uuid.uuid4().hex[:8]}"
+
+    # Run identity (phase 3). Each proposed node is a derived, grounded
+    # interpretation in the substrate — located verbatim in the source it came
+    # from and naming the interpreter that produced it. Nothing here is a
+    # belief or a live claim; that is what commit_proposal (a person) does.
+    run_id = None
+    if source_id is not None:
+        run_id = library_client.new_run_id()
+        for n in nodes:
+            span = n.get("span")
+            quote = span if isinstance(span, str) and span.strip() else None
+            iid = None
+            if quote:
+                iid = library_client.record_interpretation(
+                    kind=f"proposed-{n.get('type', 'claim')}",
+                    statement=n.get("text", "") or n.get("id", ""),
+                    grounding=[{"evidence_id": source_id, "quote": quote}],
+                    interpreter=interpreter,
+                    metadata={"run_id": run_id, "proposal_id": proposal_id,
+                              "node_id": n.get("id"), "confidence": n.get("confidence"),
+                              "claim_hash": library_client.claim_hash(n.get("text", ""))})
+            n["interpretation_id"] = iid
+        library_client.record_run(
+            kind="extract", interpreter=interpreter, inputs=[source_id],
+            outputs=[{"type": "proposal", "id": proposal_id},
+                     *[{"type": "interpretation", "id": n["interpretation_id"], "node_id": n.get("id")}
+                       for n in nodes if n.get("interpretation_id")]],
+            params={"workspace": Path(store.home).name, "title": title,
+                    "nodes": len(nodes), "edges": len(edges),
+                    "ungrounded_nodes": sum(1 for n in nodes if not n.get("interpretation_id"))},
+            run_id=run_id, started_at=started)
+
     proposal = {
         "proposal_id": proposal_id,
         "created_at": time.time(),
@@ -134,6 +182,8 @@ def ingest_document(store, source_text=None, source_ref=None, extractor=None,
         "source_type": source_type,
         "source_url": url,
         "title": title,
+        "interpreter": interpreter,
+        "run_id": run_id,
         "nodes": nodes,
         "edges": edges,
     }
@@ -141,7 +191,8 @@ def ingest_document(store, source_text=None, source_ref=None, extractor=None,
     p.mkdir(parents=True, exist_ok=True)
     _proposal_file(store, proposal_id).write_text(json.dumps(proposal, indent=2, default=str))
 
-    return {"proposal_id": proposal_id, "source_id": source_id,
+    return {"proposal_id": proposal_id, "source_id": source_id, "run_id": run_id,
+            "interpreter": interpreter,
             "counts": {"nodes": len(nodes), "edges": len(edges)}}
 
 
@@ -209,7 +260,9 @@ def commit_proposal(store, proposal_id, accepted_node_ids) -> dict:
             # per-claim interpretation event with run identity is phase 3.
             c.version_meta = dict(c.version_meta or {}, ingested_from={
                 "evidence_id": source_id, "proposal_id": proposal_id,
-                "span": span, "claim_hash": library_client.claim_hash(text or "")})
+                "span": span, "claim_hash": library_client.claim_hash(text or ""),
+                "interpretation_id": n.get("interpretation_id"),
+                "run_id": proposal.get("run_id")})
         elif ntype == "evidence":
             recorded = source_id is not None
             ev = Evidence(title=(text[:80] or nid), description=text,
@@ -242,8 +295,29 @@ def commit_proposal(store, proposal_id, accepted_node_ids) -> dict:
 
     proposal["status"] = "committed"
     proposal["committed_node_ids"] = sorted(accepted)
+
+    # Curation is a person's run: which proposed interpretations were accepted
+    # into the live graph, by content hash, under this channel's actor.
+    from epist.actor import resolve_actor
+    curate_run = None
+    if source_id is not None:
+        outputs = []
+        for n in proposal.get("nodes", []):
+            nid = n.get("id")
+            if nid in accepted and nid in id_map:
+                outputs.append({"type": "accepted", "node_id": nid, "id": id_map[nid],
+                                "interpretation_id": n.get("interpretation_id"),
+                                "claim_hash": library_client.claim_hash(n.get("text", ""))})
+        curate_run = library_client.record_run(
+            kind="curate", interpreter=library_client.interpreter_id("curate"),
+            inputs=[source_id],
+            outputs=outputs,
+            params={"workspace": Path(store.home).name, "proposal_id": proposal_id,
+                    "extract_run_id": proposal.get("run_id"), "accepted_by": resolve_actor(),
+                    "accepted": len(outputs), "skipped": skipped})
+    proposal["curate_run_id"] = curate_run
     _proposal_file(store, proposal_id).write_text(json.dumps(proposal, indent=2, default=str))
     store.save()
 
     return {"committed": counts, "skipped": skipped, "source_id": source_id,
-            "id_map": id_map}
+            "id_map": id_map, "run_id": curate_run}

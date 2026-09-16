@@ -615,6 +615,7 @@ export default function SummaryPanel({ workspace, onThesisChange, activeThesisId
       </div>
 
       <LibrarySection workspace={workspace} thesis={thesis} onUpdated={onUpdated} />
+      <RunsSection workspace={workspace} refreshKey={summary} />
       <HistorySection workspace={workspace} refreshKey={summary} />
     </div>
   );
@@ -734,6 +735,40 @@ function LibrarySection({ workspace, thesis, onUpdated }) {
         </div>
       )}
       {msg && <div style={{ fontSize: "10px", color: msg.startsWith("Grounded") || msg.startsWith("Captured ") ? "#4ade80" : "#fbbf24", marginTop: "6px", lineHeight: 1.5 }}>{msg}</div>}
+    </div>
+  );
+}
+
+// ── Interpreter runs (run identity) ─────────────────────────────────
+
+const RUN_COLORS = { generate: "#FF6B35", extract: "#a78bfa", curate: "#4ade80" };
+
+function RunsSection({ workspace, refreshKey }) {
+  const [data, setData] = useState(null);
+  useEffect(() => {
+    if (!workspace) return;
+    api.getWorkspaceRuns(workspace).then(setData).catch(() => setData(null));
+  }, [workspace, refreshKey]);
+  if (!data || !data.available || data.runs.length === 0) return null;
+  return (
+    <div style={{ background: "#141414", borderRadius: "4px", padding: "10px" }}>
+      <div style={{ fontSize: "9px", color: "#555", letterSpacing: "1px", textTransform: "uppercase", marginBottom: "8px" }}>Interpreter runs · what produced what</div>
+      {data.runs.slice(-8).map((r) => {
+        const color = RUN_COLORS[r.kind] || "#888";
+        const out = r.outputs || [];
+        const summary = r.kind === "generate" ? `${out[0]?.claims ?? "?"}c · ${out[0]?.evidence ?? "?"}e · ${out[0]?.arguments ?? "?"}a → snapshot`
+          : r.kind === "extract" ? `${r.params?.nodes ?? out.length - 1} proposed${r.params?.ungrounded_nodes ? `, ${r.params.ungrounded_nodes} ungrounded` : ""}`
+          : r.kind === "curate" ? `${r.params?.accepted ?? out.length} accepted by ${r.params?.accepted_by || r.actor}`
+          : `${out.length} outputs`;
+        return (
+          <div key={r.run_id} style={{ display: "flex", gap: "8px", fontSize: "10px", padding: "3px 0", borderBottom: "1px solid #1a1a1a", alignItems: "baseline" }}>
+            <span style={{ color: "#444", flexShrink: 0 }}>{(r.recorded_at || "").slice(0, 10)}</span>
+            <span style={{ color, flexShrink: 0, fontSize: "9px", letterSpacing: "1px", textTransform: "uppercase" }}>{r.kind}</span>
+            <span style={{ color: "#999", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.interpreter}>{summary}</span>
+            <span style={{ color: "#444", marginLeft: "auto", flexShrink: 0, fontFamily: "'JetBrains Mono', monospace", fontSize: "9px" }}>{(r.interpreter || "").replace("epistemic-workbench/", "")}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }

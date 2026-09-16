@@ -306,13 +306,19 @@ async def _generate_full_graph_async(store, thesis_text: str, on_tool_call=None)
     return first_cid
 
 
+async def generate_full_graph_async(store, thesis_text: str, on_tool_call=None) -> str:
+    """Agent-SDK generation, then record the run (phase 3 run identity)."""
+    import datetime as _dt
+    started = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    thesis_id = await _generate_full_graph_async(store, thesis_text, on_tool_call)
+    from epist.llm import _record_generate_run
+    _record_generate_run(store, thesis_text, "generate-agent", "claude-opus-4-6", started)
+    return thesis_id
+
+
 def generate_full_graph(store, thesis_text: str, on_tool_call=None) -> str:
     """Sync wrapper — calls the async Agent SDK implementation."""
-    return anyio.run(_generate_full_graph_async, store, thesis_text, on_tool_call)
-
-
-# Async version for callers already in an event loop (MCP server)
-generate_full_graph_async = _generate_full_graph_async
+    return anyio.run(generate_full_graph_async, store, thesis_text, on_tool_call)
 
 
 # ── Enhance (raw API with structured output) ─────────────────────────

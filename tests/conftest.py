@@ -54,6 +54,20 @@ def temp_library(tmp_path, monkeypatch):
     library_client.reset()
 
 
+@_pytest.fixture(autouse=True)
+def _hermetic_library(request, tmp_path, monkeypatch):
+    """No test touches the real living library. Tests that need one ask for
+    `temp_library`; everything else sees the bridge as unavailable."""
+    if "temp_library" in request.fixturenames:
+        yield
+        return
+    from epist import library_client
+    monkeypatch.setenv("EPIST_MEMORY_PATH", str(tmp_path / "no-library-here"))
+    library_client.reset()
+    yield
+    library_client.reset()
+
+
 @_pytest.fixture
 def no_library(tmp_path, monkeypatch):
     """Make the bridge report unavailable, so provenance must stay asserted."""

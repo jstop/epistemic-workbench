@@ -1456,6 +1456,15 @@ def workspace_beliefs(name: str, s: Store = Depends(get_store)):
             "anchor_command": library_client.anchor_command(name)}
 
 
+@app.get("/api/workspaces/{name}/runs")
+def workspace_runs(name: str, s: Store = Depends(get_store)):
+    """Interpreter runs recorded against this workspace (generate / extract / curate)."""
+    avail = library_client.available()
+    runs = library_client.runs_for_workspace(name) if avail else []
+    runs.sort(key=lambda r: r.get("recorded_at") or "")
+    return {"available": avail, "runs": runs}
+
+
 @app.post("/api/workspaces/{name}/snapshot")
 def workspace_snapshot(name: str, s: Store = Depends(get_store)):
     r = library_client.snapshot_workspace(s, name)

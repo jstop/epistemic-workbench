@@ -74,8 +74,18 @@ never owns beliefs.
 - Every claim carries its content hash (sha256 of the text, unnormalised); an
   accepted ingestion proposal records the accepted hashes in its commit.
 
+- **Run identity.** Every interpreter run is recorded in the library with its
+  identity (`epistemic-workbench/<component>@<model or version>`), its canonical
+  inputs and what it produced: `generate` (output: a workspace snapshot),
+  `extract` (output: the proposal plus one grounded interpretation per proposed
+  node, located verbatim in the source), `curate` (output: the accepted nodes by
+  content hash, with the accepting channel's actor). A proposed node is an
+  interpretation until a person commits it; it is never a belief. The Summary
+  tab lists the runs against a workspace.
+
 If the library is not present (`EPIST_MEMORY_PATH`), the bridge reports
-unavailable and evidence stays asserted. The design memo with the full decision
+unavailable, evidence stays asserted, and runs go unrecorded (the proposal says
+so). The design memo with the full decision
 record: https://claude.ai/artifact/9zBDqaNorWVwLkvBKqTRMg
 
 ## Workspaces

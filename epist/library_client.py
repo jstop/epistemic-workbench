@@ -119,6 +119,81 @@ def _evidence_exists(evidence_id):
         return False
 
 
+# ── run identity (phase 3) ───────────────────────────────────────────────
+#
+# Every interpreter run — an LLM extracting argumentation, an LLM generating a
+# graph, a person curating a proposal — is recorded in the substrate with its
+# identity (name@version), its canonical inputs and what it produced. Derived
+# objects name their run; a later, better interpreter is diffed, not silently
+# substituted.
+
+def interpreter_id(component: str, model: str | None = None) -> str:
+    from epist import __version__
+    return f"epistemic-workbench/{component}@{model or __version__}"
+
+
+def record_run(*, kind: str, interpreter: str, inputs: list[str] | None = None,
+               outputs: list[dict] | None = None, params: dict | None = None,
+               note: str = "", run_id: str | None = None,
+               started_at: str | None = None) -> str | None:
+    """Record a run; returns the run id, or None if the library is unavailable
+    (the run then goes unrecorded — callers say so in their own metadata)."""
+    return _in_library_thread(_record_run, kind, interpreter, inputs, outputs, params, note, run_id, started_at)
+
+
+def _record_run(kind, interpreter, inputs, outputs, params, note, run_id, started_at):
+    eng = _load()
+    if eng is None:
+        return None
+    try:
+        return eng.record_run(kind=kind, interpreter=interpreter,
+                              inputs=[i for i in (inputs or []) if i], outputs=outputs,
+                              params=params, note=note, run_id=run_id, started_at=started_at)
+    except Exception:
+        return None
+
+
+def new_run_id() -> str | None:
+    return _in_library_thread(lambda: (_load().new_run_id() if _load() else None))
+
+
+def record_interpretation(*, kind: str, statement: str, grounding: list[dict],
+                          interpreter: str, note: str = "", metadata: dict | None = None) -> str | None:
+    """Record a derived, grounded object (e.g. a proposed claim located in its
+    source). Returns the interpretation id, or None when it cannot be grounded
+    verbatim or the library is unavailable — never a fake id."""
+    return _in_library_thread(_record_interpretation, kind, statement, grounding, interpreter, note, metadata)
+
+
+def _record_interpretation(kind, statement, grounding, interpreter, note, metadata):
+    eng = _load()
+    if eng is None:
+        return None
+    try:
+        return eng.get_log().record_interpretation(
+            kind=kind, statement=statement, grounding=grounding, interpreter=interpreter,
+            note=note, metadata=metadata or {})
+    except Exception:
+        return None
+
+
+def runs_for_workspace(name: str) -> list[dict]:
+    """Runs whose params name this workspace (generate, extract, curate)."""
+    return _in_library_thread(_runs_for_workspace, name)
+
+
+def _runs_for_workspace(name):
+    eng = _load()
+    if eng is None:
+        return []
+    out = []
+    for r in eng.get_log().state()["runs"].values():
+        if (r.get("params") or {}).get("workspace") == name:
+            out.append({k: r.get(k) for k in ("run_id", "kind", "interpreter", "actor",
+                                               "recorded_at", "inputs", "outputs", "params", "note")})
+    return out
+
+
 # ── workspace snapshots ────────────────────────────────────────────────
 
 def snapshot_text(store, name: str, commit: str | None) -> str:
@@ -148,6 +223,45 @@ def snapshot_workspace(store, name: str) -> dict:
     )
     return {"ok": eid is not None, "evidence_id": eid, "uri": uri, "commit": commit,
             "thesis_text": thesis_text, "reason": None if eid else unavailable_reason()}
+
+
+def record_workspace_run(store, *, name: str, kind: str, interpreter: str,
+                         inputs: list[str] | None = None, params: dict | None = None,
+                         note: str = "", started_at: str | None = None) -> dict:
+    """Snapshot the workspace as evidence and record a run whose output is that
+    snapshot — the honest record of what an interpreter left behind in a
+    workspace. Returns {run_id, evidence_id, uri} (all None if unavailable)."""
+    return _in_library_thread(_record_workspace_run, store, name, kind, interpreter, inputs, params, note, started_at)
+
+
+def _record_workspace_run(store, name, kind, interpreter, inputs, params, note, started_at):
+    eng = _load()
+    if eng is None:
+        return {"run_id": None, "evidence_id": None, "uri": None, "reason": _error}
+    commit = None
+    if store.is_git_repo():
+        log = store.git_log(max_count=1)
+        commit = log[0]["hash"][:12] if log else None
+    uri = f"{WORKSPACE_URI}{name}" + (f"@{commit}" if commit else "")
+    thesis = next((c for c in store.claims.values() if c.is_root), None)
+    thesis_text = (thesis.notes or f"{thesis.subject} {thesis.predicate} {thesis.object}").strip() if thesis else ""
+    try:
+        lib = eng.get_log()
+        eid = lib.register_evidence(
+            media_type="text/plain", uri=uri, content=snapshot_text(store, name, commit),
+            metadata={"kind": "workspace-snapshot", "workspace": name, "commit": commit,
+                      "thesis_hash": claim_hash(thesis_text) if thesis_text else None,
+                      "source": "epistemic-workbench", "produced_by": kind})
+        rid = lib.record_run(kind=kind, interpreter=interpreter,
+                             inputs=[i for i in (inputs or []) if i],
+                             outputs=[{"type": "workspace-snapshot", "id": eid, "uri": uri,
+                                       "claims": len(store.claims), "evidence": len(store.evidence),
+                                       "arguments": len(store.arguments)}],
+                             params=dict(params or {}, workspace=name, commit=commit),
+                             note=note, started_at=started_at)
+        return {"run_id": rid, "evidence_id": eid, "uri": uri}
+    except Exception as e:
+        return {"run_id": None, "evidence_id": None, "uri": uri, "reason": str(e)}
 
 
 def beliefs_citing(name: str) -> list[dict]:

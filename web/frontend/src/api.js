@@ -132,6 +132,7 @@ export const libraryStatus = () => request(`/library/status`);
 export const searchBeliefs = (q, cluster = "") =>
   request(`/library/beliefs?q=${encodeURIComponent(q)}&cluster=${encodeURIComponent(cluster)}`);
 export const getWorkspaceBeliefs = (name) => request(`${ws(name)}/beliefs`);
+export const getWorkspaceRuns = (name) => request(`${ws(name)}/runs`);
 export const snapshotWorkspace = (name) => post(`${ws(name)}/snapshot`, {});
 export const groundBelief = (name, data) => post(`${ws(name)}/ground-belief`, data);
 export const captureBelief = (name, data) => post(`${ws(name)}/capture-belief`, data);

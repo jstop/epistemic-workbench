@@ -158,13 +158,35 @@ def write_thesis_md(store, thesis_text: str):
     (store.home / "thesis.md").write_text(thesis_text + "\n")
 
 
+GENERATE_MODEL = "claude-opus-4-6"
+
+
+def _record_generate_run(store, thesis_text: str, component: str, model: str, started_at: str):
+    """Phase 3 run identity: a generated graph is an interpreter's output.
+    Snapshot the workspace into the substrate and record the run. Best-effort —
+    generation never fails because the library is unreachable."""
+    try:
+        from epist import library_client
+        from pathlib import Path as _P
+        return library_client.record_workspace_run(
+            store, name=_P(store.home).name, kind="generate",
+            interpreter=library_client.interpreter_id(component, model),
+            params={"thesis_hash": library_client.claim_hash(thesis_text), "model": model},
+            note="graph generated from thesis text; evidence is asserted until sourced",
+            started_at=started_at)
+    except Exception:
+        return {"run_id": None}
+
+
 def generate_full_graph(store, thesis_text: str) -> str:
     """Call Claude to decompose thesis, create all objects. Returns thesis_id."""
+    import datetime as _dt
+    started = _dt.datetime.now(_dt.timezone.utc).isoformat()
     write_thesis_md(store, thesis_text)
     client = get_client()
 
     response = client.messages.create(
-        model="claude-opus-4-6",
+        model=GENERATE_MODEL,
         max_tokens=16000,
         messages=[{
             "role": "user",
@@ -254,6 +276,7 @@ def generate_full_graph(store, thesis_text: str) -> str:
                 status=DefeaterStatus.ACTIVE,
             ))
     store.save()
+    _record_generate_run(store, thesis_text, "generate", GENERATE_MODEL, started)
 
     return thesis.id
 
