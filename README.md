@@ -30,7 +30,22 @@ make test
 Workspaces live in `~/workspace/epistemic/workspaces` (override with
 `EPIST_WORKSPACES`). The CLI is `epist/cli.py`.
 
-## Web UI tabs
+## Web UI
+
+The app is organised around the four questions, with a status strip always in
+view (served build, last gate result, unreviewed beliefs, what the channel
+writes as, code revisions):
+
+| View | Question | What it holds |
+|---|---|---|
+| Believe | What do I believe? | The library on the served branch, grouped by stance in attention order, with Unreviewed and per-stance filters; belief detail (envelope, whose word, evidence with spans, claim history, runs) |
+| Argue | Does this argument hold? | The workspaces and everything below (the sidebar and the tabs in the next table) |
+| Trace | Where did this come from? | A claim or evidence id traced across beliefs, interpretations, workspaces and runs; evidence detail; the interpreter-run ledger |
+| Patterns | Where do people disagree? | Reserved for the mapper (dormant) |
+
+Deep links: `?view=believe|argue|trace|patterns`; `?ws=<name>&tab=<tab>` opens Argue.
+
+### Argue tabs
 
 | Tab | What it does |
 |---|---|
@@ -39,7 +54,6 @@ Workspaces live in `~/workspace/epistemic/workspaces` (override with
 | Inspect | A node's stored and derived confidence (with one-click adopt), provenance (attach a real source to flip asserted → recorded), support mode per supporting argument, defeaters, manual interventions, lifecycle (supersede, retire, typed links). Hard delete is offered only for nodes nothing references |
 | Add | Plain-text nodes with a dialectical role; structured claim/evidence/argument forms (argument gets a support mode); typed links; import/export of the lossless `epist-graph/v1` JSON or a flat `{nodes, edges}` document |
 | Sources | Unsourced-evidence audit; document ingestion (LLM proposes claims/arguments/objections grounded in verbatim spans; nothing is committed until you accept nodes) |
-| Library | The living library on the served branch: search beliefs by stance, open one to see its envelope, whose word it is, evidence with located spans, claim history, and the runs that touched it; "Where did this come from" traces a claim by content hash or text across beliefs, interpretations, workspaces and runs. Read-only: confirm / rephrase / retire stay in the library's review page under your own channel |
 | Analysis | Coherence checks, blind spots, stress test and assumptions for the selected node |
 
 `CURRENT_MODEL.md` is the as-built description of the object model and the
