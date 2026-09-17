@@ -107,8 +107,10 @@ export default function AdminPanel({ onChanged }) {
               <div><div style={{ color: "#e0e0e0" }}>{j.key}</div><div style={{ color: "#555", fontSize: "9px" }}>{j.when}</div></div>
               <div>
                 <div style={{ color: "#888" }}>{j.what}</div>
-                <div style={{ color: ok ? "#4ade80" : j.loaded ? "#f87171" : "#fbbf24", fontFamily: mono, fontSize: "9.5px", marginTop: "3px" }}>
-                  {!j.loaded ? "not loaded in launchd" : `last exit ${j.last_exit ?? "?"} · ${j.runs ?? "?"} runs · ${j.state ?? ""}`}
+                <div style={{ color: j.status ? (j.status.ok && !j.status.stale ? "#4ade80" : "#f87171") : ok ? "#4ade80" : j.loaded ? "#f87171" : "#fbbf24", fontFamily: mono, fontSize: "9.5px", marginTop: "3px" }}>
+                  {j.status
+                    ? `${j.status.ok ? "ok" : "FAILED"} · exit ${j.status.exit} · ${(j.status.finished_at || "").slice(0, 16).replace("T", " ")} (${j.status.age_hours}h ago${j.status.stale ? ", STALE" : ""}) · ${j.status.seconds}s`
+                    : !j.loaded ? "not loaded in launchd" : `no wrapper status yet · launchd last exit ${j.last_exit ?? "?"} · ${j.runs ?? "?"} runs`}
                 </div>
                 {j.last_line && <div style={{ color: "#666", fontFamily: mono, fontSize: "9px", marginTop: "2px", wordBreak: "break-all" }}>{j.last_line}</div>}
               </div>

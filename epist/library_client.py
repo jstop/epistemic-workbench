@@ -733,6 +733,19 @@ def admin_jobs() -> list[dict]:
             lines = []
         row["log_tail"] = lines
         row["last_line"] = lines[-1] if lines else None
+        # the platform wrapper's status file is the authoritative outcome
+        status_dir = Path(os.environ.get("EPIST_STATUS_DIR", Path.home() / "workspace" / "epistemic" / "platform" / "status"))
+        sf = status_dir / f"{key}.json"
+        if sf.exists():
+            try:
+                st = json.loads(sf.read_text())
+                import datetime as dt
+                fin = dt.datetime.fromisoformat(st["finished_at"].replace("Z", "+00:00"))
+                age_h = (dt.datetime.now(dt.timezone.utc) - fin).total_seconds() / 3600
+                row["status"] = {**st, "age_hours": round(age_h, 1), "stale": age_h > 36}
+                row["last_line"] = st.get("last_line") or row["last_line"]
+            except Exception:
+                pass
         out.append(row)
     return out
 
