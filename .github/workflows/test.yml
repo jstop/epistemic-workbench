@@ -8,6 +8,9 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - run: uv python install 3.12
       - run: uv venv && uv pip install -e ".[test]"
+      # workspaces are git repos; their commits need a committer identity (the
+      # author is the channel actor, set by the engine)
+      - run: git config --global user.name ci && git config --global user.email ci@epistemic.local
       # The living library is a sibling repo; tests that need it ask for a
       # temporary one and are skipped when it is absent. Everything else runs.
       - run: uv run pytest -q
