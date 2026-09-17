@@ -1538,6 +1538,63 @@ def workspace_capture_belief(name: str, body: CaptureBeliefRequest, s: Store = D
     return r
 
 
+# ── Admin: builds, gate, jobs, servers, archive ──────────────────────
+
+class BranchRequest(BaseModel):
+    branch: str
+
+class CheckRequest(BaseModel):
+    branch: str = "main"
+    record: bool = True
+    anchors: bool = True
+
+
+@app.get("/api/admin/overview")
+def admin_overview():
+    return {
+        "builds": library_client.admin_builds(),
+        "jobs": library_client.admin_jobs(),
+        "servers": library_client.admin_servers(),
+        "archive": library_client.admin_archive(),
+        "health": library_client.admin_health() if library_client.available() else {},
+        "served_branch": os.environ.get("EPISTEMIC_BRANCH", "main"),
+        "writes_as": os.environ.get("EPIST_WEB_ACTOR", "owner:web"),
+    }
+
+
+@app.post("/api/admin/check")
+def admin_check(body: CheckRequest):
+    return library_client.admin_check(body.branch, record=body.record, anchors=body.anchors)
+
+
+@app.post("/api/admin/rebuild")
+def admin_rebuild(body: BranchRequest):
+    if body.branch == "main":
+        raise HTTPException(400, "rebuild into a branch, check it, then promote")
+    return library_client.admin_rebuild(body.branch)
+
+
+@app.post("/api/admin/promote")
+def admin_promote(body: BranchRequest):
+    r = library_client.admin_promote(body.branch)
+    if r.get("returncode") not in (0, None) or r.get("error"):
+        raise HTTPException(400, r.get("error") or "promotion refused")
+    return r
+
+
+@app.post("/api/admin/project")
+def admin_project(body: BranchRequest):
+    return library_client.admin_project(body.branch)
+
+
+@app.post("/api/admin/jobs/{key}/run")
+def admin_run_job(key: str):
+    r = library_client.admin_run_job(key)
+    if not r.get("ok"):
+        raise HTTPException(400, r.get("error") or r.get("stderr") or "could not start job")
+    return r
+
+
 # ── Static frontend ──────────────────────────────────────────────────
 
 from fastapi.staticfiles import StaticFiles

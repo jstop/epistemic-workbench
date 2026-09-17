@@ -200,3 +200,13 @@ def test_capture_thesis_creates_derived_anchored_belief(client_with_library):
     assert b["authorship"]["stood_behind_by"] is None  # an agent wrote it; the owner has not stood behind it
     g = client.get(f"/api/workspaces/{ws}/graph").json()
     assert all(len(n["claim_hash"]) == 64 for n in g["nodes"] if n["type"] == "claim")
+
+
+def test_admin_overview_degrades_without_library(client):
+    r = client.get("/api/admin/overview")
+    assert r.status_code == 200
+    o = r.json()
+    assert set(o) >= {"builds", "jobs", "servers", "archive", "health", "served_branch", "writes_as"}
+    assert o["writes_as"] == "owner:web"
+    assert [j["key"] for j in o["jobs"]] == ["backup", "archive", "gate"]
+    assert client.post("/api/admin/rebuild", json={"branch": "main"}).status_code == 400

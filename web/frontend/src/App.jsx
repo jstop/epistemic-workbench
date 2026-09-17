@@ -9,6 +9,7 @@ import StatusStrip from "./components/StatusStrip.jsx";
 import BelievePanel from "./components/BelievePanel.jsx";
 import TracePanel from "./components/TracePanel.jsx";
 import PatternsPanel from "./components/PatternsPanel.jsx";
+import AdminPanel from "./components/AdminPanel.jsx";
 import WorkspaceSidebar from "./components/WorkspaceSidebar.jsx";
 import NewWorkspaceModal from "./components/NewWorkspaceModal.jsx";
 import CompareModal from "./components/CompareModal.jsx";
@@ -263,10 +264,22 @@ export default function App() {
             </button>
           ))}
         </div>
-        <div style={{ marginLeft: "auto" }}>
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "18px" }}>
           <StatusStrip refreshKey={analysisKey} onGoto={goto} />
+          <button onClick={() => goto("admin")} title="Builds, jobs, servers, archive, health" style={{
+            background: "transparent", border: "none",
+            borderBottom: view === "admin" ? "2px solid #60a5fa" : "2px solid transparent",
+            color: view === "admin" ? "#60a5fa" : "#555",
+            padding: "13px 4px 11px", fontSize: "10px", cursor: "pointer",
+            fontFamily: "'JetBrains Mono', monospace", letterSpacing: "1.5px", textTransform: "uppercase",
+          }}>Admin</button>
         </div>
       </div>
+      {view === "admin" && (
+        <div style={{ flex: 1, overflow: "auto", padding: "24px 32px" }}>
+          <AdminPanel onChanged={() => setAnalysisKey((k) => k + 1)} />
+        </div>
+      )}
 
       {view === "believe" && (
         <div style={{ flex: 1, overflow: "auto", padding: "24px 32px" }}>

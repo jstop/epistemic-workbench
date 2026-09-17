@@ -620,3 +620,175 @@ def _capture_thesis(*, store, belief_id: str, cluster: str, name: str, note: str
         return {"ok": False, "reason": str(e)}
     return {"ok": True, "belief": _slim(result), "evidence_id": eid, "uri": uri,
             "commit": commit, "warning": result.get("warning")}
+
+
+# ── admin: builds, gate, jobs, servers, archive ──────────────────────────
+#
+# Everything that was done from a terminal this week, made visible and
+# runnable from the app. Branch-specific engine operations run as subprocesses
+# with EPISTEMIC_BRANCH set, exactly as gate.sh and a person would run them.
+
+import subprocess as _sp
+
+
+def _memory_root() -> Path:
+    return Path(os.environ.get("EPIST_MEMORY_PATH", _DEFAULT_PATH))
+
+
+def _py() -> str:
+    return os.environ.get("EPIST_PYTHON", str(Path.home() / "python" / "global" / "bin" / "python"))
+
+
+def _engine_cli(args: list[str], branch: str | None = None, timeout: int = 600) -> dict:
+    if not (_memory_root() / "engine.py").exists():
+        return {"ok": False, "error": f"living library not found at {_memory_root()}", "returncode": None}
+    env = {k: v for k, v in os.environ.items() if k not in ("EPISTEMIC_DB_PATH", "EPISTEMIC_CONTENT_DIR",
+                                                             "EPISTEMIC_BELIEFS_DIR", "EPISTEMIC_EVENTS_JSONL",
+                                                             "EPISTEMIC_INDEX_PATH")}
+    if branch:
+        env["EPISTEMIC_BRANCH"] = branch
+    from epist.actor import resolve_actor
+    env.setdefault("EPISTEMIC_ACTOR", resolve_actor())
+    try:
+        r = _sp.run([_py(), str(_memory_root() / "engine.py"), *args], env=env, capture_output=True,
+                    text=True, timeout=timeout, cwd=str(_memory_root()))
+    except _sp.TimeoutExpired:
+        return {"ok": False, "error": "timed out", "returncode": None}
+    out = r.stdout.strip()
+    try:
+        data = json.loads(out) if out.startswith(("{", "[")) else {"stdout": out}
+    except json.JSONDecodeError:
+        data = {"stdout": out}
+    if isinstance(data, list):
+        data = {"result": data}
+    data.setdefault("returncode", r.returncode)
+    if r.returncode != 0:
+        data.setdefault("error", (r.stderr or out)[-800:])
+    return data
+
+
+def admin_builds() -> list[dict]:
+    d = _engine_cli(["branches"])
+    return d.get("result", [])
+
+
+def admin_check(branch: str, record: bool = True, anchors: bool = True) -> dict:
+    args = ["check"] + (["--record"] if record else []) + ([] if anchors else ["--no-anchors"])
+    return _engine_cli(args, branch=branch)
+
+
+def admin_rebuild(branch: str) -> dict:
+    return _engine_cli(["rebuild", "--branch", branch])
+
+
+def admin_promote(from_branch: str) -> dict:
+    return _engine_cli(["promote", "--from", from_branch])
+
+
+def admin_project(branch: str) -> dict:
+    a = _engine_cli(["project"], branch=branch)
+    b = _engine_cli(["stamp", "--write-index"], branch=branch)
+    return {"ok": a.get("returncode") == 0 and b.get("returncode") == 0, "project": a.get("stdout"), "index": (b.get("stdout") or "")[:200]}
+
+
+def admin_health() -> dict:
+    return _in_library_thread(_admin_health)
+
+
+def _admin_health():
+    eng = _load()
+    if eng is None:
+        return {}
+    h = eng.health()
+    return {"total": h.get("total"), "by_stance": h.get("by_stance"), "chain_valid": h.get("chain_valid"),
+            "needs_attention": h.get("needs_attention", [])[:40], "authorship": h.get("authorship")}
+
+
+_JOBS = {
+    "backup": {"label": "com.jstop.epistemic-backup", "log": "epistemic-backup.log", "what": "workspaces → GitHub (bundles + snapshots)", "when": "09:15 and 21:15"},
+    "archive": {"label": "com.jstop.epistemic-archive", "log": "epistemic-archive.log", "what": "sources → S3 (exports, recall.db, transcripts, library build)", "when": "21:30"},
+    "gate": {"label": "com.jstop.epistemic-gate", "log": "epistemic-gate.log", "what": "promotion checks on main and dev, recorded", "when": "03:30"},
+}
+
+
+def admin_jobs() -> list[dict]:
+    uid = os.getuid()
+    out = []
+    for key, j in _JOBS.items():
+        row = {"key": key, **j}
+        try:
+            r = _sp.run(["launchctl", "print", f"gui/{uid}/{j['label']}"], capture_output=True, text=True, timeout=10)
+            txt = r.stdout
+            row["loaded"] = r.returncode == 0
+            for k, pat in (("state", "state = "), ("runs", "runs = "), ("last_exit", "last exit code = ")):
+                for line in txt.splitlines():
+                    if pat in line:
+                        row[k] = line.split("=", 1)[1].strip()
+        except Exception as e:  # noqa: BLE001
+            row["loaded"] = False; row["error"] = str(e)
+        logp = Path.home() / "Library" / "Logs" / j["log"]
+        try:
+            lines = logp.read_text().splitlines()[-6:] if logp.exists() else []
+        except Exception:
+            lines = []
+        row["log_tail"] = lines
+        row["last_line"] = lines[-1] if lines else None
+        out.append(row)
+    return out
+
+
+def admin_run_job(key: str) -> dict:
+    j = _JOBS.get(key)
+    if not j:
+        return {"ok": False, "error": f"unknown job {key}"}
+    r = _sp.run(["launchctl", "kickstart", f"gui/{os.getuid()}/{j['label']}"], capture_output=True, text=True, timeout=20)
+    return {"ok": r.returncode == 0, "stderr": r.stderr.strip()}
+
+
+def admin_servers() -> dict:
+    """What each Claude surface is wired to, read from the two config files."""
+    out = {"claude_code": [], "claude_desktop": []}
+    for key, path in (("claude_code", Path.home() / ".claude.json"),
+                      ("claude_desktop", Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json")):
+        try:
+            cfg = json.loads(path.read_text())
+        except Exception as e:  # noqa: BLE001
+            out[key] = [{"error": str(e)}]; continue
+        for name, srv in (cfg.get("mcpServers") or {}).items():
+            args = srv.get("args") or []
+            script = next((a for a in args if a.endswith(".py")), args[-1] if args else "")
+            epist = any(k in (script + " ".join(args)) for k in ("epistemic", "episteme", "recall"))
+            env = srv.get("env") or {}
+            # what each server writes as when its config names no agent
+            default_agent = ("claude-desktop (default)" if script.endswith("epist/mcp_server.py")
+                             else "episteme (default)" if script.endswith("episteme_server.py")
+                             else "claude (recall's own scheme)" if "recall" in script
+                             else None)
+            agent = env.get("EPISTEMIC_AGENT") or env.get("EPIST_AGENT") or default_agent
+            out[key].append({"name": name, "script": script, "epistemic": epist,
+                             "branch": env.get("EPISTEMIC_BRANCH", "main" if epist else None),
+                             "agent": agent})
+    return out
+
+
+def admin_archive() -> dict:
+    root = Path.home() / "workspace" / "epistemic" / "workspaces-backup"
+    manifest = root / "sources" / "MANIFEST.tsv"
+    rows = []
+    if manifest.exists():
+        lines = manifest.read_text().splitlines()
+        head = lines[0].split("\t") if lines else []
+        for ln in lines[1:]:
+            parts = ln.split("\t")
+            if len(parts) == len(head):
+                rows.append(dict(zip(head, parts)))
+    latest = {}
+    for r in rows:
+        latest[r.get("s3_key")] = r  # last write wins: newest archived_at per key
+    try:
+        r = _sp.run(["git", "-C", str(root), "log", "-3", "--format=%ad %s", "--date=short"], capture_output=True, text=True, timeout=10)
+        commits = r.stdout.strip().splitlines()
+    except Exception:
+        commits = []
+    return {"manifest_rows": len(rows), "latest": sorted(latest.values(), key=lambda r: r.get("s3_key", "")),
+            "bucket": os.environ.get("EPIST_SOURCES_BUCKET", "epistemic-sources-523888557587"), "recent_commits": commits}

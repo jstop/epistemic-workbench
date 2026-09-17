@@ -142,3 +142,11 @@ export const getBelief = (id) => request(`/library/belief/${encodeURIComponent(i
 export const traceClaim = (q) => request(`/library/trace?q=${encodeURIComponent(q)}`);
 export const getLibraryRuns = (kind = "") => request(`/library/runs?kind=${encodeURIComponent(kind)}`);
 export const getLibraryEvidence = (id) => request(`/library/evidence/${encodeURIComponent(id)}`);
+
+// ── Admin ───────────────────────────────────────────────────────────
+export const adminOverview = () => request(`/admin/overview`);
+export const adminCheck = (branch, record = true, anchors = true) => post(`/admin/check`, { branch, record, anchors });
+export const adminRebuild = (branch) => post(`/admin/rebuild`, { branch });
+export const adminPromote = (branch) => post(`/admin/promote`, { branch });
+export const adminProject = (branch) => post(`/admin/project`, { branch });
+export const adminRunJob = (key) => post(`/admin/jobs/${key}/run`, {});
