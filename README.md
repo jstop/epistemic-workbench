@@ -42,6 +42,7 @@ writes as, code revisions):
 | Argue | Does this argument hold? | The workspaces and everything below (the sidebar and the tabs in the next table) |
 | Trace | Where did this come from? | A claim or evidence id traced across beliefs, interpretations, workspaces and runs; evidence detail; the interpreter-run ledger |
 | Patterns | Where do people disagree? | Reserved for the mapper (dormant) |
+| Admin | (operations) | Builds with last gate, run gate / reproject / rebuild / promote (gated, main backed up first); scheduled jobs with last outcome and run-now; what each Claude surface is wired to; the source archive manifest; library health and the authorship census with the owner-only attribution commands |
 
 Deep links: `?view=believe|argue|trace|patterns`; `?ws=<name>&tab=<tab>` opens Argue.
 
