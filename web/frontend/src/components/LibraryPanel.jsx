@@ -7,29 +7,29 @@ import * as api from "../api.js";
 // workspaces and runs by content hash or text.
 
 const mono = "'JetBrains Mono', monospace";
-const STANCE = { RELY: "#4ade80", NOTE: "#fbbf24", SUSPECT: "#fb923c", CONTESTED: "#f87171", HYPOTHESIS: "#60a5fa" };
+export const STANCE = { RELY: "#4ade80", NOTE: "#fbbf24", SUSPECT: "#fb923c", CONTESTED: "#f87171", HYPOTHESIS: "#60a5fa" };
 const label = { fontSize: "9px", color: "#555", letterSpacing: "1px", textTransform: "uppercase" };
 const box = { background: "#141414", border: "1px solid #222", borderRadius: "4px", padding: "10px" };
 const input = { width: "100%", background: "#0A0A0A", border: "1px solid #222", borderRadius: "3px", color: "#e0e0e0", padding: "8px 10px", fontSize: "12px", fontFamily: mono, outline: "none", boxSizing: "border-box" };
 
-function Stance({ s }) {
+export function Stance({ s }) {
   return <span style={{ color: STANCE[s] || "#888", fontSize: "9px", letterSpacing: "1px", flexShrink: 0 }}>{s}</span>;
 }
 
-function BeliefRow({ b, onOpen }) {
+export function BeliefRow({ b, onOpen }) {
   return (
-    <div onClick={() => onOpen(b.id)} style={{ padding: "6px 8px", cursor: "pointer", fontSize: "10px", borderLeft: `3px solid ${STANCE[b.stance] || "#555"}`, borderBottom: "1px solid #1a1a1a" }}>
-      <div style={{ display: "flex", gap: "8px", alignItems: "baseline" }}>
+    <div onClick={() => onOpen(b.id)} style={{ padding: "9px 12px", cursor: "pointer", fontSize: "11.5px", borderLeft: `3px solid ${STANCE[b.stance] || "#555"}`, borderBottom: "1px solid #1a1a1a" }}>
+      <div style={{ display: "flex", gap: "10px", alignItems: "baseline" }}>
         <Stance s={b.stance} />
-        <span style={{ color: "#ccc", lineHeight: 1.4 }}>{b.claim}</span>
+        <span style={{ color: "#d6d6d6", lineHeight: 1.5 }}>{b.claim}</span>
         {b.exact === true && <span style={{ color: "#FF6B35", fontSize: "9px", marginLeft: "auto", flexShrink: 0 }}>exact hash</span>}
       </div>
-      <div style={{ color: "#555", fontSize: "9px", marginTop: "2px" }}>{b.id} · {b.method} · {b.freshness}{b.unsupported ? " · unsupported" : ""}{b.stood_behind_by ? ` · stood behind by ${b.stood_behind_by}` : " · not yet stood behind"}</div>
+      <div style={{ color: "#555", fontSize: "9.5px", marginTop: "3px" }}>{b.id} · {b.method} · {b.freshness}{b.unsupported ? " · unsupported" : ""}{b.stood_behind_by ? ` · stood behind by ${b.stood_behind_by}` : <span style={{ color: "#fbbf24" }}> · unreviewed</span>}</div>
     </div>
   );
 }
 
-function BeliefDetail({ id, onClose, onSelectWorkspace }) {
+export function BeliefDetail({ id, onClose, onSelectWorkspace }) {
   const [b, setB] = useState(null);
   const [err, setErr] = useState(null);
   useEffect(() => { setB(null); setErr(null); api.getBelief(id).then(setB).catch((e) => setErr(e.message)); }, [id]);

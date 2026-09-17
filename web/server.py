@@ -1455,6 +1455,23 @@ def library_belief(belief_id: str):
     return r
 
 
+@app.get("/api/library/runs")
+def library_runs(kind: str = "", limit: int = 50):
+    if not library_client.available():
+        raise HTTPException(503, library_client.unavailable_reason() or "library unavailable")
+    return library_client.runs_all(kind, limit)
+
+
+@app.get("/api/library/evidence/{evidence_id}")
+def library_evidence(evidence_id: str):
+    if not library_client.available():
+        raise HTTPException(503, library_client.unavailable_reason() or "library unavailable")
+    r = library_client.evidence_detail(evidence_id)
+    if not r:
+        raise HTTPException(404, f"no evidence {evidence_id}")
+    return r
+
+
 @app.get("/api/library/trace")
 def library_trace(q: str = "", claim_hash: str = "", limit: int = 20):
     """Trace a claim across beliefs, interpretations, workspaces and runs."""

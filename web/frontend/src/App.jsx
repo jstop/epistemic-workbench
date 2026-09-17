@@ -5,7 +5,10 @@ import InspectPanel from "./components/InspectPanel.jsx";
 import AnalysisPanel from "./components/AnalysisPanel.jsx";
 import SummaryPanel from "./components/SummaryPanel.jsx";
 import SourcesPanel from "./components/SourcesPanel.jsx";
-import LibraryPanel from "./components/LibraryPanel.jsx";
+import StatusStrip from "./components/StatusStrip.jsx";
+import BelievePanel from "./components/BelievePanel.jsx";
+import TracePanel from "./components/TracePanel.jsx";
+import PatternsPanel from "./components/PatternsPanel.jsx";
 import WorkspaceSidebar from "./components/WorkspaceSidebar.jsx";
 import NewWorkspaceModal from "./components/NewWorkspaceModal.jsx";
 import CompareModal from "./components/CompareModal.jsx";
@@ -30,6 +33,10 @@ export default function App() {
   const [selectedId, setSelectedId] = useState(null);
   const [highlightIds, setHighlightIds] = useState([]);
   const [panel, setPanel] = useState(params.get("tab") || "summary");
+  // The four questions. ?view=believe|argue|trace|patterns; ?ws=/&tab= imply argue.
+  const [view, setView] = useState(params.get("view") || "argue");
+  const [believeFilter, setBelieveFilter] = useState(null);
+  const goto = (v, filter) => { setView(v); if (v === "believe") setBelieveFilter(filter || null); };
   const [analysisKey, setAnalysisKey] = useState(0);
 
   // Thesis selection (for workspaces with multiple thesis lineages)
@@ -110,6 +117,7 @@ export default function App() {
     setSelectedId(null);
     setActiveThesisId(null);
     setPanel("summary");
+    setView("argue");
   }, []);
 
   const handleSelectNode = (id) => {
@@ -229,14 +237,62 @@ export default function App() {
       background: "#0A0A0A", fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
       color: "#e0e0e0", overflow: "hidden",
     }}>
-      {/* Header */}
+      {/* The four questions, and the state a corrigible system keeps in view */}
+      <div style={{
+        display: "flex", alignItems: "center", gap: "22px",
+        padding: "0 16px", borderBottom: "1px solid #222", flexShrink: 0, background: "#0d0d0d",
+      }}>
+        <span style={{ fontSize: "11px", letterSpacing: "4px", color: "#FF6B35", textTransform: "uppercase", flexShrink: 0 }}>
+          Episteme
+        </span>
+        <div style={{ display: "flex", gap: "2px" }}>
+          {[
+            { key: "believe", label: "Believe", q: "What do I believe?" },
+            { key: "argue", label: "Argue", q: "Does this argument hold?" },
+            { key: "trace", label: "Trace", q: "Where did this come from?" },
+            { key: "patterns", label: "Patterns", q: "Where do people disagree?", dim: true },
+          ].map((v) => (
+            <button key={v.key} onClick={() => goto(v.key)} title={v.q} style={{
+              background: "transparent", border: "none",
+              borderBottom: view === v.key ? "2px solid #FF6B35" : "2px solid transparent",
+              color: view === v.key ? "#FF6B35" : v.dim ? "#444" : "#888",
+              padding: "13px 14px 11px", fontSize: "11px", cursor: "pointer",
+              fontFamily: "'JetBrains Mono', monospace", letterSpacing: "1.5px", textTransform: "uppercase",
+            }}>
+              {v.label}
+            </button>
+          ))}
+        </div>
+        <div style={{ marginLeft: "auto" }}>
+          <StatusStrip refreshKey={analysisKey} onGoto={goto} />
+        </div>
+      </div>
+
+      {view === "believe" && (
+        <div style={{ flex: 1, overflow: "auto", padding: "24px 32px" }}>
+          <BelievePanel onSelectWorkspace={handleSelectWorkspace} refreshKey={analysisKey} initialFilter={believeFilter} />
+        </div>
+      )}
+      {view === "trace" && (
+        <div style={{ flex: 1, overflow: "auto", padding: "24px 32px" }}>
+          <TracePanel onSelectWorkspace={handleSelectWorkspace} refreshKey={analysisKey} />
+        </div>
+      )}
+      {view === "patterns" && (
+        <div style={{ flex: 1, overflow: "auto", padding: "24px 32px" }}>
+          <PatternsPanel />
+        </div>
+      )}
+
+      {view === "argue" && (<>
+      {/* Argue context: which workspace, which thesis */}
       <div style={{
         display: "flex", alignItems: "center", justifyContent: "space-between",
         padding: "10px 16px", borderBottom: "1px solid #1a1a1a", flexShrink: 0,
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: "12px", minWidth: 0, flex: 1 }}>
-          <span style={{ fontSize: "10px", letterSpacing: "3px", color: "#FF6B35", textTransform: "uppercase", flexShrink: 0 }}>
-            Workbench
+          <span style={{ fontSize: "10px", letterSpacing: "2px", color: "#666", textTransform: "uppercase", flexShrink: 0 }} title="Does this argument hold?">
+            Workspace
           </span>
           {currentWorkspace && (
             <>
@@ -335,7 +391,6 @@ export default function App() {
               { key: "inspect", label: selectedNode ? `Inspect: ${selectedNode.label.slice(0, 30)}${selectedNode.label.length > 30 ? "…" : ""}` : "Inspect" },
               { key: "add", label: "Add" },
               { key: "sources", label: "Sources" },
-              { key: "library", label: "Library" },
               { key: "analysis", label: "Analysis" },
             ].map((tab) => (
               <button
@@ -517,18 +572,6 @@ export default function App() {
                 />
               </div>
 
-              {/* Library — beliefs + trace (phase 5) */}
-              <div style={{
-                flex: 1, overflow: "auto",
-                padding: "20px 28px",
-                display: panel === "library" ? "block" : "none",
-              }}>
-                <LibraryPanel
-                  refreshKey={analysisKey}
-                  onSelectWorkspace={(name) => { handleSelectWorkspace(name); setPanel("summary"); }}
-                />
-              </div>
-
               {/* Analysis */}
               <div style={{
                 flex: 1, overflow: "auto",
@@ -547,6 +590,7 @@ export default function App() {
           )}
         </div>
       </div>
+      </>)}
 
       {/* Modals */}
       {showNewWorkspace && (

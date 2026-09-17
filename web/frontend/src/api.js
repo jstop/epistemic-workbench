@@ -140,3 +140,5 @@ export const captureBelief = (name, data) => post(`${ws(name)}/capture-belief`, 
 // ── Library lens (phase 5) ──────────────────────────────────────────
 export const getBelief = (id) => request(`/library/belief/${encodeURIComponent(id)}`);
 export const traceClaim = (q) => request(`/library/trace?q=${encodeURIComponent(q)}`);
+export const getLibraryRuns = (kind = "") => request(`/library/runs?kind=${encodeURIComponent(kind)}`);
+export const getLibraryEvidence = (id) => request(`/library/evidence/${encodeURIComponent(id)}`);

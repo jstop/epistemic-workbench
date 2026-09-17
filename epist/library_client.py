@@ -221,10 +221,80 @@ def _status():
     if eng is None:
         return {}
     st = eng.get_log().state()
+    gates = [r for r in st["runs"].values() if r.get("kind") == "gate-check"]
+    gates.sort(key=lambda r: r.get("recorded_at") or "")
+    last_gate = None
+    if gates:
+        g = gates[-1]
+        out = (g.get("outputs") or [{}])[0]
+        last_gate = {"ok": out.get("ok"), "recorded_at": g.get("recorded_at"),
+                     "anchors_failed": (g.get("params") or {}).get("anchors_failed"),
+                     "unreviewed": (g.get("params") or {}).get("unreviewed"), "run_id": g["run_id"]}
+    import datetime as dt
+    ref = dt.date.today(); by_id = eng.all_views_by_id()
+    stances = {}
+    unreviewed = 0
+    for b, _ in eng.load_all():
+        s_ = eng.stamped(b, ref, by_id=by_id)
+        stances[s_["stance"]] = stances.get(s_["stance"], 0) + 1
+        if (s_.get("authorship") or {}).get("stood_behind_by") != "owner":
+            unreviewed += 1
     return {"branch": eng.branch(), "db": eng.db_path(), "library_code": eng.code_version(),
             "workbench_code": code_version(), "writes_as": eng.resolve_actor(),
             "counts": {"beliefs": len(st["beliefs"]), "evidence": len(st["evidence"]),
-                       "interpretations": len(st["interpretations"]), "runs": len(st["runs"])}}
+                       "interpretations": len(st["interpretations"]), "runs": len(st["runs"]),
+                       "unreviewed": unreviewed, "stances": stances},
+            "last_gate": last_gate}
+
+
+def runs_all(kind: str = "", limit: int = 50) -> list[dict]:
+    return _in_library_thread(_runs_all, kind, limit)
+
+
+def _runs_all(kind, limit):
+    eng = _load()
+    if eng is None:
+        return []
+    rs = eng.runs(kind or None)
+    return [{"run_id": r["run_id"], "kind": r["kind"], "interpreter": r["interpreter"], "actor": r.get("actor"),
+             "recorded_at": r.get("recorded_at"), "inputs": len(r.get("inputs", [])),
+             "outputs": r.get("outputs", [])[:6], "n_outputs": len(r.get("outputs", [])),
+             "params": r.get("params", {}), "note": r.get("note")} for r in rs[-limit:]][::-1]
+
+
+def evidence_detail(evidence_id: str) -> dict | None:
+    return _in_library_thread(_evidence_detail, evidence_id)
+
+
+def _evidence_detail(evidence_id):
+    eng = _load()
+    if eng is None:
+        return None
+    st = eng.get_log().state(); log = eng.get_log()
+    e = st["evidence"].get(evidence_id)
+    if not e:
+        return None
+    out = {"evidence_id": evidence_id, "uri": e.get("uri"), "media_type": e.get("media_type"),
+           "durability": e.get("durability"), "recorded_at": e.get("recorded_at"), "actor": e.get("actor"),
+           "size": e.get("size"), "metadata": e.get("metadata") or {},
+           "content_available": bool(e.get("digest") and log.store.has(e["digest"])),
+           "beliefs": [], "interpretations": [], "runs": [], "excerpt": None}
+    if out["content_available"] and (e.get("media_type") or "").startswith("text/"):
+        raw = log.evidence_content(evidence_id) or b""
+        out["excerpt"] = raw[:1200].decode("utf-8", "replace")
+    for bid, b in st["beliefs"].items():
+        if evidence_id in b.get("evidence_ids", []):
+            out["beliefs"].append({"id": bid, "claim": b["claim"],
+                                   "spans": [(g.get("quote") or "")[:160] for g in b.get("grounding", []) if g.get("evidence_id") == evidence_id]})
+    for i in st["interpretations"].values():
+        spans = [g for g in i.get("grounding", []) if g.get("evidence_id") == evidence_id]
+        if spans:
+            out["interpretations"].append({"id": i["interpretation_id"], "kind": i["kind"], "statement": i["statement"][:200],
+                                           "interpreter": i["interpreter"], "spans": [(g.get("quote") or "")[:160] for g in spans]})
+    for r in st["runs"].values():
+        if evidence_id in r.get("inputs", []) or any(o.get("id") == evidence_id for o in r.get("outputs", [])):
+            out["runs"].append({"run_id": r["run_id"], "kind": r["kind"], "interpreter": r["interpreter"], "recorded_at": r.get("recorded_at")})
+    return out
 
 
 def belief_detail(belief_id: str) -> dict | None:
