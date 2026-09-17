@@ -1,0 +1,13 @@
+name: test
+on: [push, pull_request]
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv python install 3.12
+      - run: uv venv && uv pip install -e ".[test]"
+      # The living library is a sibling repo; tests that need it ask for a
+      # temporary one and are skipped when it is absent. Everything else runs.
+      - run: uv run pytest -q
