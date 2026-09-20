@@ -103,6 +103,8 @@ export const link = (name, data) => post(`${ws(name)}/link`, data);
 export const setSupportMode = (name, data) => post(`${ws(name)}/set-support-mode`, data);
 export const supersede = (name, data) => post(`${ws(name)}/supersede`, data);
 export const exportGraph = (name) => request(`${ws(name)}/export`);
+// Uploads an unsigned bundle to Braid and returns its review-and-sign URL. Nothing is public until signed there.
+export const publishToBraid = (name) => post(`${ws(name)}/publish-to-braid`, {});
 export const importGraph = (name, graph, mode = "merge") =>
   post(`${ws(name)}/import`, { graph, mode });
 

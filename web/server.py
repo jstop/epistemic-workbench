@@ -5,6 +5,7 @@ fork/merge and manual intervention support. Mirrors the MCP server.
 """
 import json as json_mod
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Optional
@@ -27,7 +28,7 @@ from epist.engine import (
     surface_assumptions, stress_test, bayesian_update, compute_calibration,
     propagate_confidence,
 )
-from epist import graph_io, provenance, ingest, library_client
+from epist import graph_io, provenance, ingest, library_client, braid
 from epist.provenance import provenance_kind
 from epist.engine import display_text
 from epist.actor import declare_channel
@@ -56,12 +57,32 @@ from epist.compare import (
 
 
 app = FastAPI(title="Epistemic Workbench API")
+# This API is unauthenticated and can rewrite every workspace, so it must not answer
+# to whatever website happens to be open in another tab. Allowed: the app itself on
+# localhost (any port, incl. the Vite dev server), and Braid, whose "Submit a thesis"
+# page reads workspaces from here so publishing can start in its UI.
+BRAID_ORIGIN = os.environ.get("BRAID_HOST", "https://braid.joshautomates.com").rstrip("/")
+ALLOWED_ORIGIN_RE = r"^(https?://(localhost|127\.0\.0\.1)(:\d+)?|" + re.escape(BRAID_ORIGIN) + r")$"
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origin_regex=ALLOWED_ORIGIN_RE,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Registered AFTER the CORS middleware so that it wraps it: CORS answers preflights itself and
+# never calls further in, so anything added inside it would miss exactly the response that matters.
+@app.middleware("http")
+async def _private_network_access(request, call_next):
+    """Chrome's Private Network Access: an https page may call 127.0.0.1 only if the
+    preflight says so. Granted to the allowed origins above and to nobody else."""
+    response = await call_next(request)
+    if re.match(ALLOWED_ORIGIN_RE, request.headers.get("origin", "")):
+        response.headers["Access-Control-Allow-Private-Network"] = "true"
+    return response
 
 
 # ── Workspace resolution ─────────────────────────────────────────────
@@ -1284,6 +1305,31 @@ def import_route(name: str, body: ImportRequest):
         raise HTTPException(400, str(e))
     s.git_commit(f"[manual] Import graph ({summary.get('mode')}, mode={body.mode})")
     return {"ok": True, **summary}
+
+
+# ── Publish to Braid ─────────────────────────────────────────────────
+# One thesis, one signature. These routes build and upload an UNSIGNED bundle; the
+# owner reviews and signs it on Braid. Nothing here holds a key or signs anything.
+
+@app.get("/api/workspaces/{name}/braid-bundle")
+def braid_bundle_route(name: str, s: Store = Depends(get_store)):
+    """The workspace as a braid-thesis/1 bundle. Read-only; Braid's picker calls this."""
+    try:
+        return braid.build_bundle(s, name)
+    except braid.BraidError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/workspaces/{name}/publish-to-braid")
+def publish_to_braid_route(name: str, s: Store = Depends(get_store)):
+    _autosave_if_dirty(s, "before publish to Braid")  # so the bundle names a real commit
+    try:
+        bundle = braid.build_bundle(s, name)
+        res = braid.upload(bundle)
+    except braid.BraidError as e:
+        raise HTTPException(400 if "no live claims" in str(e) else 502, str(e))
+    return {"ok": True, "submit": res["submit"], "sha256": res["sha256"],
+            "commit": bundle["source"]["commit"], "counts": braid.counts(bundle)}
 
 
 @app.get("/api/workspaces/{name}/analysis/propagation")

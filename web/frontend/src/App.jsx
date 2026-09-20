@@ -164,6 +164,24 @@ export default function App() {
     }
   }, [refreshWorkspaceList]);
 
+  // Publish to Braid: the server uploads an unsigned bundle; signing happens on Braid, once.
+  const [publishing, setPublishing] = useState(false);
+  const [publishMsg, setPublishMsg] = useState(null);
+  const handlePublishToBraid = useCallback(async () => {
+    if (!currentWorkspace) return;
+    setPublishing(true); setPublishMsg(null);
+    const tab = window.open("", "_blank"); // opened inside the click so the browser does not block it
+    try {
+      const r = await api.publishToBraid(currentWorkspace);
+      if (tab) tab.location = r.submit;
+      setPublishMsg({ ok: true, url: r.submit, text: `Uploaded unsigned · ${r.counts.claims} claims · review & sign on Braid →` });
+    } catch (err) {
+      if (tab) tab.close();
+      setPublishMsg({ ok: false, text: err.message });
+    } finally { setPublishing(false); }
+  }, [currentWorkspace]);
+  useEffect(() => { setPublishMsg(null); }, [currentWorkspace]); // a link to another workspace's upload would mislead
+
   const handleCompare = useCallback((other) => {
     setCompareTarget(other);
   }, []);
@@ -362,6 +380,23 @@ export default function App() {
                 </option>
               ))}
             </select>
+          )}
+          <button
+            onClick={handlePublishToBraid}
+            disabled={!currentWorkspace || publishing}
+            title="Upload this workspace to Braid as one thesis (unsigned), then review and sign it there once"
+            style={{
+              background: "transparent", border: "1px solid #c2401c", borderRadius: "3px",
+              color: publishing ? "#666" : "#e5633c", padding: "4px 10px", fontSize: "10px",
+              cursor: publishing ? "default" : "pointer", fontFamily: "'JetBrains Mono', monospace",
+            }}
+          >
+            {publishing ? "UPLOADING…" : "PUBLISH TO BRAID"}
+          </button>
+          {publishMsg && (
+            <span style={{ fontSize: "10px", color: publishMsg.ok ? "#7a7" : "#d77", maxWidth: "260px" }}>
+              {publishMsg.ok ? <a href={publishMsg.url} target="_blank" rel="noreferrer" style={{ color: "#7a7" }}>{publishMsg.text}</a> : publishMsg.text}
+            </span>
           )}
           <button
             onClick={() => currentWorkspace && handleUpdated()}

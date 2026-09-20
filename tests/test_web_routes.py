@@ -210,3 +210,90 @@ def test_admin_overview_degrades_without_library(client):
     assert o["writes_as"] == "owner:web"
     assert [j["key"] for j in o["jobs"]] == ["backup", "archive", "gate"]
     assert client.post("/api/admin/rebuild", json={"branch": "main"}).status_code == 400
+
+
+# ── Publish to Braid ─────────────────────────────────────────────────
+
+def _thesis_ws(client):
+    ws = _mk(client, "braid-ws")
+    t = _claim(client, ws, "Pumping is draining the aquifer", node_type="thesis", confidence=0.8)
+    p = _claim(client, ws, "Monitoring wells show an 11 m decline", confidence=0.5)
+    a = client.post(f"/api/workspaces/{ws}/add-argument", json={"conclusion_id": t, "premise_ids": [p]}).json()
+    client.post(f"/api/workspaces/{ws}/add-evidence-to-claim", json={
+        "claim_id": t, "title": "Survey well logs", "description": "transducers", "source": "State survey"})
+    return ws, t, p, a
+
+
+def test_braid_bundle_is_what_a_stranger_can_weigh(client):
+    ws, t, p, a = _thesis_ws(client)
+    arg_id = a.get("id") or a.get("argument", {}).get("id")
+    if arg_id:
+        client.post(f"/api/workspaces/{ws}/arguments/{arg_id}/defeaters",
+                    json={"type": "undercutting", "description": "Drought would do the same"})
+    b = client.get(f"/api/workspaces/{ws}/braid-bundle").json()
+    assert b["format"] == "braid-thesis/1"
+    assert b["root"] == t and b["source"]["tool"] == "epistemic-workbench" and b["source"]["workspace"] == ws
+    assert len(b["source"]["commit"]) == 40                      # names a real commit
+    ids = {c["id"] for c in b["claims"]} | {e["id"] for e in b["evidence"]}
+    assert {t, p} <= ids
+    assert all(0 <= c["confidence"] <= 1 and 0 < len(c["text"]) <= 600 for c in b["claims"])
+    assert next(c for c in b["claims"] if c["id"] == t)["text"] == "Pumping is draining the aquifer"
+    for arg in b["arguments"]:                                     # nothing points outside the bundle
+        assert arg["conclusion"] in ids and set(arg["premises"]) <= ids
+    assert all(e["provenance"] == "asserted" for e in b["evidence"])  # a bare source string is never provenance
+    if arg_id:
+        assert any(o["text"] == "Drought would do the same" for arg in b["arguments"] for o in arg["objections"])
+
+
+def test_braid_bundle_of_an_empty_workspace_is_refused(client):
+    ws = _mk(client, "empty-ws")
+    assert client.get(f"/api/workspaces/{ws}/braid-bundle").status_code == 400
+
+
+def test_publish_to_braid_uploads_unsigned_and_returns_the_review_url(client, monkeypatch):
+    import io
+    from epist import braid
+    ws, *_ = _thesis_ws(client)
+    seen = {}
+
+    class _Res(io.BytesIO):
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def fake_urlopen(req, timeout=0):
+        seen["url"] = req.full_url
+        seen["bundle"] = json.loads(json.loads(req.data)["text"])
+        return _Res(json.dumps({"sha256": "ab" * 32, "submit": "https://braid.example/#/submit/" + "ab" * 32}).encode())
+
+    monkeypatch.setattr(braid.urllib.request, "urlopen", fake_urlopen)
+    r = client.post(f"/api/workspaces/{ws}/publish-to-braid", json={})
+    assert r.status_code == 200, r.text
+    assert r.json()["submit"].endswith("ab" * 32) and r.json()["counts"]["claims"] == 2
+    assert seen["url"].endswith("/api/bundle") and seen["bundle"]["format"] == "braid-thesis/1"
+    assert "signature" not in json.dumps(seen["bundle"]).lower()  # this side never signs anything
+
+
+def test_publish_to_braid_says_so_when_braid_is_unreachable(client, monkeypatch):
+    from epist import braid
+    ws, *_ = _thesis_ws(client)
+
+    def down(req, timeout=0):
+        raise braid.urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr(braid.urllib.request, "urlopen", down)
+    r = client.post(f"/api/workspaces/{ws}/publish-to-braid", json={})
+    assert r.status_code == 502 and "could not reach Braid" in r.json()["detail"]
+
+
+def test_api_answers_only_to_itself_and_to_braid(client):
+    ok = client.get("/api/workspaces", headers={"Origin": "https://braid.joshautomates.com"})
+    assert ok.headers.get("access-control-allow-origin") == "https://braid.joshautomates.com"
+    assert ok.headers.get("access-control-allow-private-network") == "true"
+    assert client.get("/api/workspaces", headers={"Origin": "http://127.0.0.1:8111"}).headers.get("access-control-allow-origin")
+    for origin in ("https://evil.example", "https://braid.joshautomates.com.evil.example"):
+        r = client.get("/api/workspaces", headers={"Origin": origin})
+        assert "access-control-allow-origin" not in r.headers
+        assert "access-control-allow-private-network" not in r.headers
+    pre = client.options("/api/workspaces", headers={"Origin": "https://braid.joshautomates.com",
+                         "Access-Control-Request-Method": "GET", "Access-Control-Request-Private-Network": "true"})
+    assert pre.status_code == 200 and pre.headers.get("access-control-allow-private-network") == "true"
