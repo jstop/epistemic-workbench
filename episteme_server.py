@@ -231,6 +231,18 @@ def http_app():
     from starlette.routing import Mount, Route
     from epist.auth import BearerAuthMiddleware, healthz
 
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    # The transport's DNS-rebinding guard accepts only localhost unless told the
+    # public name. Behind the proxy the Host header is the real hostname.
+    hosts = {"localhost", "localhost:*", "127.0.0.1", "127.0.0.1:*"}
+    public = (os.environ.get("EPISTEME_HOSTNAME") or "").strip()
+    if public:
+        hosts |= {public, f"{public}:443", f"{public}:*"}
+    hosts |= {h.strip() for h in os.environ.get("EPISTEME_ALLOWED_HOSTS", "").split(",") if h.strip()}
+    mcp.settings.transport_security = TransportSecuritySettings(
+        allowed_hosts=sorted(hosts),
+        allowed_origins=[f"https://{public}"] if public else [])
     mcp.settings.streamable_http_path = "/mcp"
     inner = mcp.streamable_http_app()          # serves /mcp; creates the session manager
 
