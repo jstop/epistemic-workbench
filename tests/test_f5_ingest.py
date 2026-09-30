@@ -72,8 +72,6 @@ def test_commit_all_brings_edges(tmp_path):
 
 def test_llm_extractor_drops_ungrounded_spans(monkeypatch):
     """A node whose span is NOT in the document is discarded — anti-confabulation."""
-    import epist.llm as llm
-
     fake = {
         "nodes": [
             {"id": "n0", "type": "claim", "text": "grounded", "span": "Proof of work"},
@@ -83,11 +81,9 @@ def test_llm_extractor_drops_ungrounded_spans(monkeypatch):
         "edges": [{"from": "n1", "rel": "supports", "to": "n0"}],
     }
 
-    class _Msgs:
-        def create(self, **k):
-            return type("R", (), {"content": [type("b", (), {"text": __import__("json").dumps(fake)})()]})()
-
-    monkeypatch.setattr(llm, "get_client", lambda: type("C", (), {"messages": _Msgs()})())
+    import epist.agent as agent
+    monkeypatch.setattr(agent, "complete",
+                        lambda system_prompt, prompt: __import__("json").dumps(fake))
     out = ingest.llm_extractor(DOC)
     ids = {n["id"] for n in out["nodes"]}
     assert ids == {"n0"}          # ungrounded n1 dropped

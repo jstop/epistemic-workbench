@@ -32,8 +32,22 @@ from epist.llm import (
     list_theses,
     get_thesis_versions,
     write_thesis_md,
+    MODEL,
     accept_enhanced_thesis,
 )
+
+
+# ── CLI resolution ───────────────────────────────────────────────────
+
+def _cli_path() -> Optional[str]:
+    """Claude Code binary for the Agent SDK. The SDK prefers its own bundled
+    CLI, which can lag behind the models we ask for (e.g. the 0.1.x bundle is
+    2.1.59; Fable 5.1 needs >= 2.1.251). Prefer EPIST_CLAUDE_CLI, then the
+    user's installed CLI, and fall back to the SDK default."""
+    for cand in (os.environ.get("EPIST_CLAUDE_CLI"), Path.home() / ".local/bin/claude"):
+        if cand and Path(cand).is_file():
+            return str(cand)
+    return None
 
 
 # ── Subscription auth ────────────────────────────────────────────────
@@ -48,6 +62,44 @@ def _use_subscription_auth():
     subscription that Claude Code is logged into.
     """
     os.environ.pop("ANTHROPIC_API_KEY", None)
+
+
+# ── Single-turn completion (shared by ingest and any other one-shot call) ──
+
+async def _complete_async(system_prompt: str, prompt: str) -> str:
+    """One prompt in, the model's final text out, via the Agent SDK so the
+    call bills the Claude subscription (not an API key)."""
+    from claude_agent_sdk import query, ClaudeAgentOptions, ResultMessage
+
+    _use_subscription_auth()
+    result_text = ""
+    async for message in query(
+        prompt=prompt,
+        options=ClaudeAgentOptions(
+            cli_path=_cli_path(),
+            system_prompt=system_prompt,
+            model=MODEL,
+            allowed_tools=[],
+            max_turns=1,
+        ),
+    ):
+        if isinstance(message, ResultMessage):
+            result_text = message.result or ""
+    return result_text
+
+
+def complete(system_prompt: str, prompt: str) -> str:
+    """Sync single-turn completion. Safe from plain sync code and from inside a
+    running event loop (the MCP server's async tools call sync extractors): in
+    the latter case the SDK call runs on a worker thread with its own loop."""
+    import asyncio
+    import concurrent.futures
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return anyio.run(_complete_async, system_prompt, prompt)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        return ex.submit(anyio.run, _complete_async, system_prompt, prompt).result()
 
 
 # ── MCP tools for graph building ─────────────────────────────────────
@@ -243,9 +295,10 @@ async def _generate_full_graph_async(store, thesis_text: str, on_tool_call=None)
     server = create_sdk_mcp_server("epist-tools", tools=tools)
 
     options = ClaudeAgentOptions(
+        cli_path=_cli_path(),
         mcp_servers={"epist": server},
         system_prompt=GENERATE_SYSTEM,
-        model="claude-opus-4-6",
+        model=MODEL,
         thinking={"type": "adaptive"},
         max_turns=40,
         permission_mode="bypassPermissions",
@@ -312,7 +365,7 @@ async def generate_full_graph_async(store, thesis_text: str, on_tool_call=None) 
     started = _dt.datetime.now(_dt.timezone.utc).isoformat()
     thesis_id = await _generate_full_graph_async(store, thesis_text, on_tool_call)
     from epist.llm import _record_generate_run
-    _record_generate_run(store, thesis_text, "generate-agent", "claude-opus-4-6", started)
+    _record_generate_run(store, thesis_text, "generate-agent", MODEL, started)
     return thesis_id
 
 
@@ -411,8 +464,9 @@ async def _enhance_thesis_async(store, thesis_id: str) -> dict:
     async for message in query(
         prompt=prompt,
         options=ClaudeAgentOptions(
+            cli_path=_cli_path(),
             system_prompt=ENHANCE_SYSTEM,
-            model="claude-opus-4-6",
+            model=MODEL,
             allowed_tools=[],
             max_turns=1,
         ),
@@ -507,8 +561,9 @@ async def _synthesize_thesis_async(label_a: str, store_a, label_b: str, store_b)
     async for message in query(
         prompt=prompt,
         options=ClaudeAgentOptions(
+            cli_path=_cli_path(),
             system_prompt=SYNTHESIZE_SYSTEM,
-            model="claude-opus-4-6",
+            model=MODEL,
             allowed_tools=[],
             max_turns=1,
         ),

@@ -158,7 +158,9 @@ def write_thesis_md(store, thesis_text: str):
     (store.home / "thesis.md").write_text(thesis_text + "\n")
 
 
-GENERATE_MODEL = "claude-opus-4-6"
+# One model for every LLM call in the workbench; override with EPIST_MODEL.
+MODEL = os.environ.get("EPIST_MODEL", "claude-fable-5-1")
+GENERATE_MODEL = MODEL
 
 
 def _record_generate_run(store, thesis_text: str, component: str, model: str, started_at: str):
@@ -681,7 +683,7 @@ def enhance_thesis(store, thesis_id: str) -> dict:
     client = get_client()
 
     response = client.messages.create(
-        model="claude-opus-4-6",
+        model=MODEL,
         max_tokens=8000,
         messages=[{"role": "user", "content": user_message}],
     )

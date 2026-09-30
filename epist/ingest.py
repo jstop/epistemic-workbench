@@ -61,21 +61,20 @@ Rules:
 """
 
 
-EXTRACTOR_MODEL = "claude-opus-4-6"
+from .llm import MODEL as EXTRACTOR_MODEL
 
 
 def llm_extractor(text: str) -> dict:
     """Production extractor: ask the LLM to surface the argumentation present in
-    `text`, each node grounded in a verbatim span. Returns {nodes, edges}."""
-    from .llm import get_client, _parse_llm_json
-    client = get_client()
-    resp = client.messages.create(
-        model=EXTRACTOR_MODEL,
-        max_tokens=8000,
-        messages=[{"role": "user",
-                   "content": f"{INGEST_PROMPT}\n\n=== DOCUMENT ===\n{text}"}],
+    `text`, each node grounded in a verbatim span. Returns {nodes, edges}.
+    Runs through the Agent SDK (subscription-billed), like generate/enhance."""
+    from .agent import complete
+    from .llm import _parse_llm_json
+    raw = complete(
+        INGEST_PROMPT,
+        f"=== DOCUMENT ===\n{text}\n\nReturn ONLY the JSON object.",
     )
-    data = _parse_llm_json(resp.content[0].text)
+    data = _parse_llm_json(raw)
     # Drop any node whose span is not actually in the document (anti-confabulation).
     kept = []
     for n in data.get("nodes", []):
