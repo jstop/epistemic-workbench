@@ -170,7 +170,13 @@ mcp = FastMCP("epistemic-workbench")
 # ── Helpers ──────────────────────────────────────────────────────────
 
 def _resolve_workspace(workspace: str) -> Path:
-    """Resolve a workspace name to a path."""
+    """Resolve a workspace name to a path. In remote mode (EPISTEME_TOKEN set) a
+    workspace is a name under WORKSPACES_DIR, never a path."""
+    from epist.auth import remote_mode, valid_workspace_name
+    if remote_mode():
+        if not valid_workspace_name(workspace):
+            raise ValueError(f"invalid workspace name {workspace!r}")
+        return WORKSPACES_DIR / workspace
     p = Path(workspace)
     return p if p.is_absolute() else WORKSPACES_DIR / workspace
 

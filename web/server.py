@@ -57,7 +57,7 @@ from epist.compare import (
 
 
 app = FastAPI(title="Epistemic Workbench API")
-# This API is unauthenticated and can rewrite every workspace, so it must not answer
+# Locally this API is unauthenticated and can rewrite every workspace, so it must not answer
 # to whatever website happens to be open in another tab. Allowed: the app itself on
 # localhost (any port, incl. the Vite dev server), and Braid, whose "Submit a thesis"
 # page reads workspaces from here so publishing can start in its UI.
@@ -65,12 +65,13 @@ BRAID_ORIGIN = os.environ.get("BRAID_HOST", "https://braid.joshautomates.com").r
 ALLOWED_ORIGIN_RE = r"^(https?://(localhost|127\.0\.0\.1)(:\d+)?|" + re.escape(BRAID_ORIGIN) + r")$"
 
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origin_regex=ALLOWED_ORIGIN_RE,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+import inspect as _inspect
+_cors_kwargs = dict(allow_origin_regex=ALLOWED_ORIGIN_RE, allow_methods=["*"], allow_headers=["*"])
+if "allow_private_network" in _inspect.signature(CORSMiddleware.__init__).parameters:
+    # Starlette >= 1.0 answers the private-network preflight itself and returns 400
+    # unless this is set; older versions ignore the header and the middleware below adds it.
+    _cors_kwargs["allow_private_network"] = True
+app.add_middleware(CORSMiddleware, **_cors_kwargs)
 
 
 # Registered AFTER the CORS middleware so that it wraps it: CORS answers preflights itself and
@@ -85,6 +86,17 @@ async def _private_network_access(request, call_next):
     return response
 
 
+# Remote mode (EPISTEME_TOKEN set): every /api call needs the bearer token. Added
+# last so it is the outermost layer; without the token this is a no-op.
+from epist.auth import BearerAuthMiddleware, remote_mode, valid_workspace_name
+app.add_middleware(BearerAuthMiddleware)
+
+
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}
+
+
 # ── Workspace resolution ─────────────────────────────────────────────
 
 WORKSPACES_DIR = Path(os.environ.get(
@@ -94,6 +106,10 @@ WORKSPACES_DIR = Path(os.environ.get(
 
 
 def _resolve_workspace(name: str) -> Path:
+    if remote_mode():
+        if not valid_workspace_name(name):
+            raise HTTPException(400, f"invalid workspace name {name!r}")
+        return WORKSPACES_DIR / name
     p = Path(name)
     return p if p.is_absolute() else WORKSPACES_DIR / name
 

@@ -224,5 +224,43 @@ def episteme_status() -> dict:
     }
 
 
+def http_app():
+    """The MCP server as an ASGI app for remote mode: streamable HTTP at /mcp,
+    a bearer token on every call (epist.auth), /healthz open for the proxy."""
+    from starlette.applications import Starlette
+    from starlette.routing import Mount, Route
+    from epist.auth import BearerAuthMiddleware, healthz
+
+    mcp.settings.streamable_http_path = "/mcp"
+    inner = mcp.streamable_http_app()          # serves /mcp; creates the session manager
+
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _lifespan(app):
+        async with mcp.session_manager.run():
+            yield
+
+    outer = Starlette(routes=[Route("/healthz", healthz), Mount("/", app=inner)], lifespan=_lifespan)
+    outer.add_middleware(BearerAuthMiddleware)
+    return outer
+
+
+def main() -> None:
+    transport = (os.environ.get("EPISTEME_TRANSPORT") or "stdio").strip().lower()
+    if transport == "stdio":
+        mcp.run()
+        return
+    if transport != "http":
+        raise SystemExit(f"EPISTEME_TRANSPORT must be stdio or http, not {transport!r}")
+    from epist.auth import remote_mode
+    if not remote_mode():
+        raise SystemExit("EPISTEME_TRANSPORT=http requires EPISTEME_TOKEN (the bearer token)")
+    import uvicorn
+    app = http_app()
+    uvicorn.run(app, host=os.environ.get("EPISTEME_HOST", "127.0.0.1"),
+                port=int(os.environ.get("EPISTEME_PORT", "8010")), log_level="info")
+
+
 if __name__ == "__main__":
-    mcp.run()
+    main()

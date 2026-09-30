@@ -37,6 +37,12 @@ from epist.llm import (
 )
 
 
+BUILTIN_TOOLS_OFF = [
+    "Bash", "Read", "Write", "Edit", "MultiEdit", "NotebookEdit", "Glob", "Grep", "LS",
+    "WebFetch", "WebSearch", "Agent", "Task", "TodoWrite", "KillShell", "BashOutput",
+]
+
+
 # ── CLI resolution ───────────────────────────────────────────────────
 
 def _cli_path() -> Optional[str]:
@@ -301,7 +307,11 @@ async def _generate_full_graph_async(store, thesis_text: str, on_tool_call=None)
         model=MODEL,
         thinking={"type": "adaptive"},
         max_turns=40,
+        # The graph builder needs only the in-process epist tools. It reads thesis
+        # text that may come from anywhere (ingested documents, the web API), so
+        # every built-in that touches the machine or the network is off.
         permission_mode="bypassPermissions",
+        disallowed_tools=BUILTIN_TOOLS_OFF,
     )
 
     final_result_text = ""

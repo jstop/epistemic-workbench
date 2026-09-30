@@ -30,6 +30,32 @@ make test
 Workspaces live in `~/workspace/epistemic/workspaces` (override with
 `EPIST_WORKSPACES`). The CLI is `epist/cli.py`.
 
+## Configuration and remote mode
+
+Every setting is an environment variable; `platform/config/episteme.env` is the
+one place they are set for the Mac, and Terraform's first-boot script writes the
+same names into `/etc/episteme/episteme.env` on the host.
+
+| Variable | Meaning |
+|---|---|
+| `EPIST_MODEL` | model for every LLM call (default `claude-fable-5-1`) |
+| `EPIST_CLAUDE_CLI` | Claude Code binary the Agent SDK drives (falls back to `~/.local/bin/claude`, then the SDK's bundle) |
+| `EPISTEME_TRANSPORT` | `stdio` (default, what Claude Code / Desktop spawn) or `http` |
+| `EPISTEME_TOKEN` | set = **remote mode**: `/mcp` and every `/api` route need `Authorization: Bearer <token>`, and a workspace is a name, never a path |
+| `EPISTEME_HOST`, `EPISTEME_PORT` | bind address in http mode (default 127.0.0.1:8010) |
+| `EPIST_GATE_ANCHORS` | `1` lets the nightly gate execute belief anchors (shell strings any client can store); off by default |
+
+Every model call goes through the Claude Agent SDK on the owner's subscription
+(`CLAUDE_CODE_OAUTH_TOKEN` on a headless host); nothing uses an API key. The
+generate agent is limited to the in-process graph tools.
+
+Remote: `EPISTEME_TRANSPORT=http EPISTEME_TOKEN=… python episteme_server.py`
+serves streamable HTTP at `/mcp` with `/healthz` open. Connect Claude Code with
+`claude mcp add --transport http episteme https://<host>/mcp --header "Authorization: Bearer <token>"`.
+The web app (`web.server:app`) applies the same token to `/api`; the frontend
+asks for it once and keeps it in the browser. The container image, compose
+stack and host live in `platform/deploy`.
+
 ## Web UI
 
 The app is organised around the four questions, with a status strip always in

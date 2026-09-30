@@ -1,10 +1,36 @@
 const BASE = "/api";
+const TOKEN_KEY = "episteme_token";
 
-async function request(path, opts = {}) {
+// Remote mode: the API wants a bearer token. Kept per browser; asked for once,
+// and again if the server says it is wrong.
+function getToken() {
+  try { return localStorage.getItem(TOKEN_KEY) || ""; } catch { return ""; }
+}
+export function setToken(t) {
+  try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY); } catch {}
+}
+function askToken(message) {
+  const t = window.prompt(message || "Episteme access token");
+  if (t) setToken(t.trim());
+  return getToken();
+}
+
+async function request(path, opts = {}, retried = false) {
+  const token = getToken();
   const res = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json", ...opts.headers },
     ...opts,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...opts.headers,
+    },
   });
+  if (res.status === 401 && !retried) {
+    setToken("");
+    if (askToken(token ? "Token rejected. Episteme access token:" : "Episteme access token")) {
+      return request(path, opts, true);
+    }
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(err.detail || res.statusText);

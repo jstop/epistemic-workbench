@@ -13,7 +13,8 @@ dependencies = [
   "pydantic>=2",
   "rich>=13",
   "pyyaml>=6",
-  "claude-agent-sdk",
+  "claude-agent-sdk>=0.2.100",
+  "starlette>=0.46",
 ]
 
 [project.optional-dependencies]
